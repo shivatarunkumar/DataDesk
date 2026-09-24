@@ -1,0 +1,250 @@
+@import "tailwindcss";
+
+/* DataDesk shares KnowHub's palette: a deep forest green with warm cream surfaces, a lime
+   accent for highlights, and a serif for display type. Every colour is a token —
+   components never name a colour, so light and dark mode both follow from here. */
+:root {
+  color-scheme: light;
+  --bg: #ffffff;
+  --surface: #f2f1ea;
+  --surface-hover: #e7e5db;
+  --text: #11241d;
+  --muted: #586b62;
+  --border: #dedcd1;
+  --brand: #14543e;
+  --brand-hover: #0d3f2d;
+  --brand-contrast: #ffffff;
+  --accent: #6fa82f;
+  --accent-contrast: #11241d;
+  --chip-active: #14543e;
+  --chip-active-text: #ffffff;
+  --ok: #17794f;
+  --warn: #a2660f;
+  --bad: #b4342a;
+  /* file-type glyphs: folders read as folders, data files as data */
+  --folder: #c9971c;
+  --sheet: #14543e;
+  --json: #7a5aa6;
+}
+
+/* Dark mode comes from the OS unless someone picks a theme: ThemeToggle sets
+   data-theme on <html>, and the layout renders the saved choice from a cookie so the page
+   never flashes the wrong palette.
+
+   The two rules below must hold the same tokens — one for "auto", one for "always dark". */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0b1a14;
+    --surface: #12271f;
+    --surface-hover: #1b352b;
+    --text: #e9f0ec;
+    --muted: #9db0a7;
+    --border: #1e382d;
+    --brand: #6cc295;
+    --brand-hover: #92d7b1;
+    --brand-contrast: #06140f;
+    --accent: #a4d44f;
+    --accent-contrast: #06140f;
+    --chip-active: #e9f0ec;
+    --chip-active-text: #0b1a14;
+    --ok: #58c08a;
+    --warn: #d8a34a;
+    --bad: #e57a70;
+    --folder: #e0b84a;
+    --sheet: #6cc295;
+    --json: #b89be0;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0b1a14;
+  --surface: #12271f;
+  --surface-hover: #1b352b;
+  --text: #e9f0ec;
+  --muted: #9db0a7;
+  --border: #1e382d;
+  --brand: #6cc295;
+  --brand-hover: #92d7b1;
+  --brand-contrast: #06140f;
+  --accent: #a4d44f;
+  --accent-contrast: #06140f;
+  --chip-active: #e9f0ec;
+  --chip-active-text: #0b1a14;
+  --ok: #58c08a;
+  --warn: #d8a34a;
+  --bad: #e57a70;
+  --folder: #e0b84a;
+  --sheet: #6cc295;
+  --json: #b89be0;
+}
+
+/* Explicitly light, whatever the OS says. */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-hover: var(--surface-hover);
+  --color-fg: var(--text);
+  --color-muted: var(--muted);
+  --color-line: var(--border);
+  --color-brand: var(--brand);
+  --color-brand-hover: var(--brand-hover);
+  --color-brand-contrast: var(--brand-contrast);
+  --color-chip-active: var(--chip-active);
+  --color-chip-active-text: var(--chip-active-text);
+  --color-accent: var(--accent);
+  --color-accent-contrast: var(--accent-contrast);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-bad: var(--bad);
+  --color-folder: var(--folder);
+  --color-sheet: var(--sheet);
+  --color-json: var(--json);
+  /* Loaded in app/layout.tsx from Google Fonts. If that is blocked — a locked-down
+     network, offline — the next family in each stack takes over and the app still
+     looks deliberate. */
+  --font-sans:
+    "Figtree", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    sans-serif;
+  --font-display: "Source Serif 4", Georgia, "Times New Roman", serif;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* Page titles are set in the serif; everything structural (nav, labels, buttons) stays
+   in the sans, so the serif reads as voice rather than decoration. */
+h1,
+.display {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Numbers line up in columns in the grid and the file list. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Upload progress: a sheen travelling along the bar, so a slow upload visibly feels alive. */
+@keyframes datadesk-sheen {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+.upload-sheen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent);
+  animation: datadesk-sheen 1.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .upload-sheen::after {
+    animation: none;
+  }
+}
+
+/* Load flow (components/LoadFlow.tsx): the stage in progress breathes, and the line into
+   it runs, so "waiting" reads as alive rather than finished. */
+@keyframes flow-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--warn) 45%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 10px color-mix(in srgb, var(--warn) 0%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--warn) 0%, transparent);
+  }
+}
+
+.flow-current {
+  animation: flow-pulse 1.8s ease-out infinite;
+}
+
+@keyframes flow-run {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 24px 0;
+  }
+}
+
+.flow-running {
+  background-image: repeating-linear-gradient(
+    90deg,
+    var(--warn) 0 8px,
+    color-mix(in srgb, var(--warn) 25%, transparent) 8px 16px
+  );
+  background-size: 24px 100%;
+  animation: flow-run 0.8s linear infinite;
+}
+
+/* the same line, vertical (the flow stacks on narrow screens) */
+.flow-running-y {
+  background-image: repeating-linear-gradient(
+    180deg,
+    var(--warn) 0 8px,
+    color-mix(in srgb, var(--warn) 25%, transparent) 8px 16px
+  );
+  background-size: 100% 24px;
+  animation: flow-run-y 0.8s linear infinite;
+}
+
+@keyframes flow-run-y {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 0 24px;
+  }
+}
+
+@keyframes flow-pop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.12);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.flow-pop {
+  animation: flow-pop 0.35s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flow-current,
+  .flow-running,
+  .flow-running-y,
+  .flow-pop {
+    animation: none;
+  }
+}

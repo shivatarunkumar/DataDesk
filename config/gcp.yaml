@@ -1,0 +1,58 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# GCP Configuration
+# DataDesk application
+#
+# DO NOT commit real service account keys or credentials to version control.
+# Use environment variables or a secrets manager for sensitive values.
+# ──────────────────────────────────────────────────────────────────────────────
+
+gcp:
+  # GCP project to connect to
+  project_id: "bigquerytarun"
+
+  # Geographic region for GCP services
+  region: "us-central1"
+
+  # ── Authentication ──────────────────────────────────────────────────────────
+  auth:
+    # Method: "service_account" | "application_default" | "workload_identity"
+    method: "application_default"
+
+    # Service account email (optional — inferred from key file if not set)
+    service_account_email: "650084903791-compute@developer.gserviceaccount.com"
+
+  # ── BigQuery ────────────────────────────────────────────────────────────────
+  bigquery:
+    enabled: true
+
+    # Default dataset to query when no dataset is specified
+    default_dataset: "datamanager"
+
+    # Billing project (defaults to project_id if not set)
+    billing_project: "bigquerytarun"
+
+    # Maximum bytes billed per query (safety limit — 10 GB default)
+    max_bytes_billed: 10_000_000_000
+
+    # Query timeout in seconds
+    timeout_seconds: 60
+
+    # Datasets accessible to this application
+    datasets:
+      - name: "datamanager"
+        description: "Primary analytics dataset"
+        location: "US"
+
+  # ── Cloud Storage ───────────────────────────────────────────────────────────
+  storage:
+    enabled: true
+    # Bucket that backs the per-user Data Workspace (files live under
+    # workspaces/{username}/{file_id}/v{n}_{name}). Fill in your existing bucket.
+    # The ADC principal needs roles/storage.objectAdmin on this bucket.
+    default_bucket: "data-upload-001"
+
+  # ── Logging ─────────────────────────────────────────────────────────────────
+  logging:
+    # Send application logs to Google Cloud Logging
+    enabled: false
+    log_name: "datadesk"

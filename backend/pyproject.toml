@@ -1,0 +1,11 @@
+[project]
+name = "datadesk-api"
+version = "0.2.0"
+description = "DataDesk API: personal GCS-backed data workspace with governed loads into Postgres and BigQuery"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = ["integration: needs the local Postgres (skipped when unreachable)"]

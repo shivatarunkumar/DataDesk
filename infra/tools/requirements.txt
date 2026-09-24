@@ -1,0 +1,6 @@
+# Tools for database/ and infra/ scripts (setup_db, migrate, check_db, check_gcp).
+psycopg[binary]==3.3.6
+google-cloud-storage==3.14.1
+google-cloud-bigquery==3.42.0
+pytest==9.1.1
+ruff==0.16.8
