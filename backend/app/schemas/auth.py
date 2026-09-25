@@ -1,9 +1,12 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 USERNAME_PATTERN = r"^[a-z0-9][a-z0-9_.-]{1,49}$"
+
+Role = Literal["user", "admin"]
 
 
 class RegisterIn(BaseModel):
@@ -13,6 +16,8 @@ class RegisterIn(BaseModel):
     last_name: str | None = Field(default=None, max_length=100)
     # optional: derived from the email when left empty
     username: str | None = Field(default=None, pattern=USERNAME_PATTERN)
+    # what they ask for; an admin grants it (or not) when approving the account
+    requested_role: Role = "user"
 
     @field_validator("email")
     @classmethod
@@ -72,6 +77,9 @@ class UserOut(BaseModel):
     last_name: str | None
     display_name: str
     role: str
+    requested_role: str
+    # when a delegated admin's rights end; None for a permanent admin (or a user)
+    admin_until: datetime | None = None
     status: str
     last_login_at: datetime | None = None
     created_at: datetime

@@ -17,6 +17,10 @@ class User(UUIDPrimaryKey, CreatedAt, Base):
     password_hash: Mapped[str]
     password_changed_at: Mapped[datetime] = mapped_column(server_default=func.now())
     role: Mapped[str] = mapped_column(default="user")
+    # asked for at registration; becomes role only when an admin approves the account
+    requested_role: Mapped[str] = mapped_column(default="user")
+    # a delegated admin goes back to "user" at this time; None means permanent
+    admin_until: Mapped[datetime | None]
     status: Mapped[str] = mapped_column(default="pending_approval")
     reviewed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     reviewed_at: Mapped[datetime | None]
@@ -41,3 +45,18 @@ class PasswordResetRequest(UUIDPrimaryKey, CreatedAt, Base):
     status: Mapped[str] = mapped_column(default="pending")
     resolved_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     resolved_at: Mapped[datetime | None]
+
+
+class AdminAccessRequest(UUIDPrimaryKey, CreatedAt, Base):
+    """A user asking to be an admin for a while; an admin approves or rejects it."""
+
+    __tablename__ = "admin_access_requests"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    duration_minutes: Mapped[int]
+    reason: Mapped[str | None]
+    status: Mapped[str] = mapped_column(default="pending")
+    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    reviewed_at: Mapped[datetime | None]
+    review_note: Mapped[str | None]
+    granted_until: Mapped[datetime | None]

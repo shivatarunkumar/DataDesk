@@ -34,16 +34,22 @@ async def list_users(session: AsyncSession, status: str | None = None) -> list[U
     return list(await session.scalars(query))
 
 
-async def set_user_status(session: AsyncSession, admin: User, user_id: uuid.UUID, status: str) -> User:
+async def set_user_status(
+    session: AsyncSession, admin: User, user_id: uuid.UUID, status: str, role: str | None = None
+) -> User:
     user = await session.get(User, user_id)
     if user is None or user.deleted_at is not None:
         raise NotFound("User")
     if user.id == admin.id:
         raise ServiceError("You can't change your own account's status.", status_code=409)
+    if status == "active" and user.status == "pending_approval":
+        # approval is the only point where an account gets its role
+        user.role = role or user.requested_role
+        user.admin_until = None  # approved as an admin means a permanent one
     user.status = status
     user.reviewed_by = admin.id
     user.reviewed_at = datetime.now(UTC)
-    log.info("%s set %s to %s", admin.username, user.username, status)
+    log.info("%s set %s to %s (%s)", admin.username, user.username, status, user.role)
     return user
 
 

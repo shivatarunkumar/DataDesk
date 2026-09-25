@@ -70,12 +70,13 @@ async def register(session: AsyncSession, data: RegisterIn) -> User:
         last_name=data.last_name,
         password_hash=security.hash_password(data.password),
         role="user",
+        requested_role=data.requested_role,
         status="pending_approval",
         failed_login_count=0,
     )
     session.add(user)
     await session.flush()
-    log.info("registered %s: waiting for admin approval", username)
+    log.info("registered %s as %s: waiting for admin approval", username, data.requested_role)
     return user
 
 

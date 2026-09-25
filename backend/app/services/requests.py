@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.models.targets import UploadTarget
-from app.models.user import PasswordResetRequest, User
+from app.models.user import AdminAccessRequest, PasswordResetRequest, User
 from app.models.workspace import UploadRequest, WorkspaceFile
 from app.services.errors import NotFound
 
@@ -99,6 +99,9 @@ async def pending_counts(session: AsyncSession) -> dict:
         or 0
     )
     resets = await session.scalar(select(func.count()).where(PasswordResetRequest.status == "pending")) or 0
+    admin_access = (
+        await session.scalar(select(func.count()).where(AdminAccessRequest.status == "pending")) or 0
+    )
     tables = (
         await session.scalar(select(func.count()).where(UploadTarget.onboarding_status == "pending")) or 0
     )
@@ -107,5 +110,6 @@ async def pending_counts(session: AsyncSession) -> dict:
         "tables": tables,
         "accounts": accounts,
         "password_resets": resets,
-        "total": loads + tables + accounts + resets,
+        "admin_access": admin_access,
+        "total": loads + tables + accounts + resets + admin_access,
     }

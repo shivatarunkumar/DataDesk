@@ -25,13 +25,11 @@ const MAIN: NavItem[] = [
   { href: "/studio", label: "Data Studio", icon: StudioIcon },
   { href: "/uploads", label: "Load requests", icon: QueueIcon },
   { href: "/onboarding", label: "Onboarding", icon: DatabaseIcon },
+  { href: "/history", label: "Load history", icon: HistoryIcon },
+  { href: "/people", label: "People", icon: PeopleIcon },
 ];
 
-const ADMIN: NavItem[] = [
-  { href: "/admin", label: "Approvals", icon: ShieldIcon },
-  { href: "/admin?tab=history", label: "Load history", icon: HistoryIcon },
-  { href: "/admin?tab=people", label: "People", icon: PeopleIcon },
-];
+const ADMIN: NavItem[] = [{ href: "/admin", label: "Approvals", icon: ShieldIcon }];
 
 const POLL_MS = 30_000;
 
@@ -65,6 +63,7 @@ function Badge({ counts, mini }: { counts: PendingCounts | null; mini?: boolean 
     counts.tables && `${counts.tables} table${counts.tables === 1 ? "" : "s"} to onboard`,
     counts.accounts && `${counts.accounts} account${counts.accounts === 1 ? "" : "s"}`,
     counts.password_resets && `${counts.password_resets} password reset${counts.password_resets === 1 ? "" : "s"}`,
+    counts.admin_access && `${counts.admin_access} admin access request${counts.admin_access === 1 ? "" : "s"}`,
   ]
     .filter(Boolean)
     .join(", ");

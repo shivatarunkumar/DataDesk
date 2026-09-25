@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { dateTime } from "@/lib/format";
 import type { SessionUser } from "@/lib/types";
 import { UserIcon } from "./icons";
 
@@ -71,10 +72,18 @@ export function AccountMenu({ user }: { user: SessionUser | null }) {
             <p className="truncate text-xs text-muted">{user.email}</p>
             {user.role === "admin" && (
               <span className="mt-2 inline-block rounded-full bg-surface px-2 py-0.5 text-xs font-medium text-brand">
-                Admin
+                {user.admin_until ? `Admin until ${dateTime(user.admin_until)}` : "Admin"}
               </span>
             )}
           </div>
+          <Link
+            href="/account"
+            role="menuitem"
+            onClick={() => setOpen(false)}
+            className="block px-4 py-2 text-sm hover:bg-surface-hover"
+          >
+            My account
+          </Link>
           <Link href="/" role="menuitem" onClick={() => setOpen(false)} className="block px-4 py-2 text-sm hover:bg-surface-hover">
             My files
           </Link>

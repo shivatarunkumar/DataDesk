@@ -43,6 +43,28 @@ SET default_tablespace = '';
 SET default_table_access_method = heap;
 
 --
+-- Name: admin_access_requests; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.admin_access_requests (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    duration_minutes integer NOT NULL,
+    reason text,
+    status text DEFAULT 'pending'::text NOT NULL,
+    reviewed_by uuid,
+    reviewed_at timestamp with time zone,
+    review_note text,
+    granted_until timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT admin_access_requests_duration_minutes_check CHECK (((duration_minutes >= 1) AND (duration_minutes <= 129600))),
+    CONSTRAINT admin_access_requests_reason_check CHECK ((length(reason) <= 1000)),
+    CONSTRAINT admin_access_requests_review_note_check CHECK ((length(review_note) <= 2000)),
+    CONSTRAINT admin_access_requests_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'approved'::text, 'rejected'::text, 'cancelled'::text])))
+);
+
+
+--
 -- Name: bq_access_requests; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -297,10 +319,14 @@ CREATE TABLE public.users (
     deleted_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    requested_role text DEFAULT 'user'::text NOT NULL,
+    admin_until timestamp with time zone,
+    CONSTRAINT users_admin_until_check CHECK (((role = 'admin'::text) OR (admin_until IS NULL))),
     CONSTRAINT users_email_check CHECK (((email = lower(email)) AND (email ~ '^[^@\s]+@[^@\s]+\.[^@\s]+$'::text))),
     CONSTRAINT users_failed_login_count_check CHECK ((failed_login_count >= 0)),
     CONSTRAINT users_first_name_check CHECK ((length(first_name) <= 100)),
     CONSTRAINT users_last_name_check CHECK ((length(last_name) <= 100)),
+    CONSTRAINT users_requested_role_check CHECK ((requested_role = ANY (ARRAY['user'::text, 'admin'::text]))),
     CONSTRAINT users_role_check CHECK ((role = ANY (ARRAY['user'::text, 'admin'::text]))),
     CONSTRAINT users_status_check CHECK ((status = ANY (ARRAY['pending_approval'::text, 'active'::text, 'rejected'::text, 'suspended'::text, 'deactivated'::text]))),
     CONSTRAINT users_username_check CHECK ((username ~ '^[a-z0-9][a-z0-9_.-]{1,49}$'::text))
@@ -364,6 +390,14 @@ CREATE TABLE public.workspace_folders (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT workspace_folders_name_check CHECK ((((length(btrim(name)) >= 1) AND (length(btrim(name)) <= 255)) AND (POSITION(('/'::text) IN (name)) = 0)))
 );
+
+
+--
+-- Name: admin_access_requests admin_access_requests_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.admin_access_requests
+    ADD CONSTRAINT admin_access_requests_pkey PRIMARY KEY (id);
 
 
 --
@@ -516,6 +550,20 @@ ALTER TABLE ONLY public.workspace_folders
 
 ALTER TABLE ONLY public.workspace_folders
     ADD CONSTRAINT workspace_folders_user_id_path_key UNIQUE (user_id, path);
+
+
+--
+-- Name: admin_access_requests_one_pending; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX admin_access_requests_one_pending ON public.admin_access_requests USING btree (user_id) WHERE (status = 'pending'::text);
+
+
+--
+-- Name: admin_access_requests_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX admin_access_requests_status_idx ON public.admin_access_requests USING btree (status, created_at);
 
 
 --
@@ -677,6 +725,22 @@ CREATE TRIGGER users_set_updated_at BEFORE UPDATE ON public.users FOR EACH ROW E
 --
 
 CREATE TRIGGER workspace_files_set_updated_at BEFORE UPDATE ON public.workspace_files FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+
+--
+-- Name: admin_access_requests admin_access_requests_reviewed_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.admin_access_requests
+    ADD CONSTRAINT admin_access_requests_reviewed_by_fkey FOREIGN KEY (reviewed_by) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: admin_access_requests admin_access_requests_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.admin_access_requests
+    ADD CONSTRAINT admin_access_requests_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 
 
 --

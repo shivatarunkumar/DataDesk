@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { type FormEvent, type ReactNode, useState } from "react";
 import { ApiError, api, errorText } from "@/lib/api";
 import { CheckIcon, LogoMark } from "./icons";
-import { Alert, Field } from "./ui";
+import { Alert, Field, inputClass } from "./ui";
 
 type FieldErrors = Partial<Record<string, string>>;
 
@@ -74,16 +74,17 @@ export function LoginForm() {
           value={password}
           onChange={setPassword}
           autoComplete="current-password"
-          action={
-            <Link href="/forgot-password" className="text-xs font-medium text-brand hover:underline">
-              Forgot password?
-            </Link>
-          }
         />
         <button type="submit" disabled={busy} className={submitClass}>
           {busy ? "Signing in…" : "Sign in"}
         </button>
       </form>
+      {/* after the button, so Tab goes straight from the email to the password */}
+      <p className="mt-4 text-center text-sm">
+        <Link href="/forgot-password" className="font-medium text-brand hover:underline">
+          Forgot password?
+        </Link>
+      </p>
       <p className="mt-6 text-center text-sm text-muted">
         New to DataDesk?{" "}
         <Link href="/register" className="font-medium text-brand hover:underline">
@@ -95,7 +96,15 @@ export function LoginForm() {
 }
 
 export function RegisterForm() {
-  const [form, setForm] = useState({ first_name: "", last_name: "", username: "", email: "", password: "", confirm: "" });
+  const [form, setForm] = useState({
+    first_name: "",
+    last_name: "",
+    username: "",
+    email: "",
+    requested_role: "user",
+    password: "",
+    confirm: "",
+  });
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [busy, setBusy] = useState(false);
@@ -120,6 +129,7 @@ export function RegisterForm() {
           first_name: form.first_name,
           last_name: form.last_name || null,
           username: form.username || null,
+          requested_role: form.requested_role,
         },
       });
       setDone(true);
@@ -176,6 +186,22 @@ export function RegisterForm() {
           hint="Optional. Leave empty to use the part of your email before the @."
           error={fieldErrors.username}
         />
+        <label className="flex flex-col gap-1.5 text-sm font-medium">
+          Account type
+          <select
+            className={`${inputClass} font-normal`}
+            value={form.requested_role}
+            onChange={(e) => set("requested_role")(e.target.value)}
+          >
+            <option value="user">User</option>
+            <option value="admin">Admin</option>
+          </select>
+          <span className="text-xs font-normal text-muted">
+            {form.requested_role === "admin"
+              ? "Admins approve accounts and loads, and onboard tables. An admin confirms this when approving you."
+              : "Keep files, edit them and ask for loads into tables."}
+          </span>
+        </label>
         <Field
           label="Password"
           type="password"

@@ -6,6 +6,9 @@ export type SessionUser = {
   last_name: string | null;
   display_name: string;
   role: "user" | "admin";
+  requested_role: "user" | "admin";
+  /** when a delegated admin goes back to being a user; null when permanent */
+  admin_until: string | null;
   status: string;
   last_login_at: string | null;
   created_at: string;
@@ -207,7 +210,14 @@ export type StudioResult = {
   max_changes: number;
 };
 
-export type PendingCounts = { loads: number; tables: number; accounts: number; password_resets: number; total: number };
+export type PendingCounts = {
+  loads: number;
+  tables: number;
+  accounts: number;
+  password_resets: number;
+  admin_access: number;
+  total: number;
+};
 
 export type PasswordReset = {
   id: string;
@@ -215,5 +225,20 @@ export type PasswordReset = {
   user_email: string;
   user_name: string;
   status: string;
+  created_at: string;
+};
+
+export type AdminRequest = {
+  id: string;
+  user_id: string;
+  user_name: string;
+  user_email: string;
+  duration_minutes: number;
+  reason: string | null;
+  status: "pending" | "approved" | "rejected" | "cancelled";
+  reviewed_by_name: string | null;
+  reviewed_at: string | null;
+  review_note: string | null;
+  granted_until: string | null;
   created_at: string;
 };

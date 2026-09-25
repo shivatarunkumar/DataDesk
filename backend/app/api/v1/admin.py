@@ -12,11 +12,19 @@ from app.api.v1.requests import request_out
 from app.core.config import Settings, get_settings
 from app.core.db import get_session
 from app.models.user import User
-from app.schemas.admin import PasswordResetOut, ReviewIn, SetPasswordIn
+from app.schemas.admin import (
+    AccessIn,
+    AdminRequestDecisionIn,
+    AdminRequestOut,
+    ApproveUserIn,
+    PasswordResetOut,
+    ReviewIn,
+    SetPasswordIn,
+)
 from app.schemas.auth import UserOut
 from app.schemas.workspace import UploadRequestOut
+from app.services import access, reviews
 from app.services import requests as requests_svc
-from app.services import reviews
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -33,9 +41,13 @@ async def list_users(
 
 @router.post("/users/{user_id}/approve", response_model=UserOut)
 async def approve_user(
-    user_id: uuid.UUID, admin: User = Depends(current_admin), session: AsyncSession = Depends(get_session)
+    user_id: uuid.UUID,
+    body: ApproveUserIn | None = None,
+    admin: User = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
 ):
-    user = await reviews.set_user_status(session, admin, user_id, "active")
+    """Activate an account. A new one gets `role` if given, else the role it asked for."""
+    user = await reviews.set_user_status(session, admin, user_id, "active", body.role if body else None)
     await session.commit()
     return user
 
@@ -56,6 +68,51 @@ async def suspend_user(
     user = await reviews.set_user_status(session, admin, user_id, "suspended")
     await session.commit()
     return user
+
+
+@router.put("/users/{user_id}/access", response_model=UserOut)
+async def set_user_access(
+    user_id: uuid.UUID,
+    body: AccessIn,
+    admin: User = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Make someone an admin for a while or permanently, or a user again. Any time."""
+    user = await access.set_access(session, admin, user_id, body.role, body.duration_minutes)
+    await session.commit()
+    return user
+
+
+# ------------------------------------------------------------------ admin access requests
+@router.get("/admin-requests", response_model=list[AdminRequestOut])
+async def pending_admin_requests(
+    _: User = Depends(current_admin), session: AsyncSession = Depends(get_session)
+):
+    return await access.list_requests(session, pending_only=True)
+
+
+@router.post("/admin-requests/{request_id}/approve", status_code=status.HTTP_204_NO_CONTENT)
+async def approve_admin_request(
+    request_id: uuid.UUID,
+    body: AdminRequestDecisionIn | None = None,
+    admin: User = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Grant admin rights: for the time asked, a different time, or permanently."""
+    body = body or AdminRequestDecisionIn()
+    await access.approve_request(session, admin, request_id, body.duration_minutes, body.permanent)
+    await session.commit()
+
+
+@router.post("/admin-requests/{request_id}/reject", status_code=status.HTTP_204_NO_CONTENT)
+async def reject_admin_request(
+    request_id: uuid.UUID,
+    body: ReviewIn | None = None,
+    admin: User = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    await access.reject_request(session, admin, request_id, body.review_note if body else None)
+    await session.commit()
 
 
 # ------------------------------------------------------------------ password resets

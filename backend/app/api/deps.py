@@ -21,6 +21,7 @@ from app.core.db import get_session
 from app.core.logging import user_var
 from app.core.security import decode_access_token
 from app.models.user import User
+from app.services.access import expire_admin_if_due
 
 ACCESS_COOKIE = "datadesk_access"
 
@@ -58,6 +59,9 @@ async def current_user_optional(
     if user.status != "active" or user.deleted_at is not None:
         log.info("user %s is %s; treating as signed out", user.username, user.status)
         return None
+
+    if expire_admin_if_due(user):
+        await session.commit()  # their admin time is up: every check from here on sees "user"
 
     user_var.set(user.username)  # every later log line in this request names them
     log.debug("  signed in as %s (%s)", user.username, user.role)
