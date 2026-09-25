@@ -1,6 +1,26 @@
 line-length = 110
 target-version = "py312"
-extend-exclude = ["frontend"]
+extend-exclude = [
+    "frontend",
+    # the pre-restructure backend: nothing imports these any more (app.main mounts app.api only)
+    "backend/app/routers",
+    "backend/app/access_models.py",
+    "backend/app/auth_models.py",
+    "backend/app/auth_schemas.py",
+    "backend/app/auth_utils.py",
+    "backend/app/bq_access_models.py",
+    "backend/app/bq_client.py",
+    "backend/app/config.py",
+    "backend/app/datamanager_database.py",
+    "backend/app/deps.py",
+    "backend/app/file_parser.py",
+    "backend/app/gcs_client.py",
+    "backend/app/loaders.py",
+    "backend/app/target_database.py",
+    "backend/app/validators.py",
+    "backend/app/workspace_models.py",
+    "backend/app/workspace_schemas.py",
+]
 
 [lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
