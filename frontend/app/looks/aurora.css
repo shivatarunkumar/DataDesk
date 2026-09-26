@@ -1,0 +1,559 @@
+/* ==========================================================================
+   Aurora — ink and indigo, glass and glow.
+
+   A whole look on top of the same components: nothing here applies unless <html> has
+   data-look="aurora", so the original look ("OG") is exactly what it was.
+
+   Two kinds of rule:
+   - @layer components: defaults (card surfaces, inputs, transitions). Tailwind utilities
+     come later, so a component's own hover / selected / error states still win.
+   - unlayered: the few places the look must override a utility (the floating sidebar,
+     the glass top bar, dialogs and menus).
+   ========================================================================== */
+
+/* ------------------------------------------------------------------ palette */
+:root[data-look="aurora"] {
+  color-scheme: light;
+  --bg: #f8f8fd;
+  --card: #ffffff;
+  --surface: #f0f1f9;
+  --surface-hover: #e7e8f5;
+  --text: #0d0f24;
+  --muted: #5b6080;
+  --border: #e2e4f0;
+  --brand: #5046e5;
+  --brand-hover: #4338ca;
+  --brand-contrast: #ffffff;
+  --accent: #22d3ee;
+  --accent-contrast: #04151c;
+  --chip-active: #0d0f24;
+  --chip-active-text: #ffffff;
+  --ok: #0e9f6e;
+  --warn: #b86e06;
+  --bad: #e11d48;
+  --folder: #f59e0b;
+  --sheet: #10b981;
+  --json: #8b5cf6;
+
+  /* the look's own tokens */
+  --grad: linear-gradient(135deg, #6366f1 0%, #7c3aed 100%);
+  --grad-spectrum: linear-gradient(90deg, #6366f1, #a855f7 45%, #22d3ee);
+  --glow-a: rgba(99, 102, 241, 0.18);
+  --glow-b: rgba(34, 211, 238, 0.13);
+  --glow-c: rgba(236, 72, 153, 0.08);
+  --dot: rgba(13, 15, 36, 0.07);
+  --shadow-card: 0 1px 2px rgba(16, 18, 50, 0.04), 0 6px 20px -8px rgba(16, 18, 50, 0.1);
+  --shadow-lift: 0 2px 4px rgba(16, 18, 50, 0.05), 0 18px 40px -14px rgba(49, 46, 129, 0.28);
+  --shadow-float: 0 30px 80px -24px rgba(15, 17, 60, 0.45);
+  --ring: 0 0 0 4px color-mix(in srgb, var(--brand) 18%, transparent);
+}
+
+/* dark: the same two rules as OG, one for Auto and one for "always dark" */
+@media (prefers-color-scheme: dark) {
+  :root[data-look="aurora"]:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #07080f;
+    --card: #0d0f1a;
+    --surface: #131627;
+    --surface-hover: #1a1e33;
+    --text: #eceefb;
+    --muted: #8f94b4;
+    --border: #1d2135;
+    --brand: #8b8ff9;
+    --brand-hover: #a5a8ff;
+    --brand-contrast: #07080f;
+    --accent: #22d3ee;
+    --accent-contrast: #04151c;
+    --chip-active: #eceefb;
+    --chip-active-text: #07080f;
+    --ok: #34d399;
+    --warn: #fbbf24;
+    --bad: #fb7185;
+    --folder: #fbbf24;
+    --sheet: #34d399;
+    --json: #c4b5fd;
+    --glow-a: rgba(99, 102, 241, 0.24);
+    --glow-b: rgba(34, 211, 238, 0.1);
+    --glow-c: rgba(236, 72, 153, 0.09);
+    --dot: rgba(255, 255, 255, 0.05);
+    --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 10px 30px -16px rgba(0, 0, 0, 0.7);
+    --shadow-lift: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 24px 50px -20px rgba(0, 0, 0, 0.85);
+    --shadow-float: 0 40px 100px -30px rgba(0, 0, 0, 0.9);
+  }
+}
+
+:root[data-look="aurora"][data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #07080f;
+  --card: #0d0f1a;
+  --surface: #131627;
+  --surface-hover: #1a1e33;
+  --text: #eceefb;
+  --muted: #8f94b4;
+  --border: #1d2135;
+  --brand: #8b8ff9;
+  --brand-hover: #a5a8ff;
+  --brand-contrast: #07080f;
+  --accent: #22d3ee;
+  --accent-contrast: #04151c;
+  --chip-active: #eceefb;
+  --chip-active-text: #07080f;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --bad: #fb7185;
+  --folder: #fbbf24;
+  --sheet: #34d399;
+  --json: #c4b5fd;
+  --glow-a: rgba(99, 102, 241, 0.24);
+  --glow-b: rgba(34, 211, 238, 0.1);
+  --glow-c: rgba(236, 72, 153, 0.09);
+  --dot: rgba(255, 255, 255, 0.05);
+  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 10px 30px -16px rgba(0, 0, 0, 0.7);
+  --shadow-lift: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 24px 50px -20px rgba(0, 0, 0, 0.85);
+  --shadow-float: 0 40px 100px -30px rgba(0, 0, 0, 0.9);
+}
+
+/* ------------------------------------------------------------------ canvas and type */
+/* The canvas glows faintly from the corners, with a dot grid that fades out down the
+   page. It sits on <html> so the grid (behind everything, z-index -1) can show through. */
+html[data-look="aurora"] {
+  background:
+    radial-gradient(1100px 620px at 88% -8%, var(--glow-a), transparent 62%),
+    radial-gradient(900px 520px at 18% -4%, var(--glow-b), transparent 60%),
+    radial-gradient(900px 700px at 55% 115%, var(--glow-c), transparent 60%),
+    var(--bg);
+  background-attachment: fixed;
+}
+
+html[data-look="aurora"] body {
+  background: transparent;
+  font-family: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  letter-spacing: -0.006em;
+}
+
+html[data-look="aurora"] body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: radial-gradient(var(--dot) 1px, transparent 1px);
+  background-size: 22px 22px;
+  mask-image: linear-gradient(to bottom, black, transparent 75%);
+}
+
+/* Titles in Instrument Serif: a light, high-contrast serif that reads as editorial next
+   to Geist's engineered sans. */
+html[data-look="aurora"] h1 {
+  font-family: "Instrument Serif", Georgia, serif;
+  font-weight: 400;
+  font-size: clamp(2.1rem, 1.7rem + 1vw, 2.7rem);
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+}
+
+html[data-look="aurora"] .display {
+  font-family: "Instrument Serif", Georgia, serif;
+  font-weight: 400;
+  letter-spacing: -0.012em;
+}
+
+html[data-look="aurora"] [role="dialog"] h2.display {
+  font-size: 1.85rem;
+  line-height: 1.1;
+}
+
+html[data-look="aurora"] :is(code, pre, kbd, .font-mono) {
+  font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+html[data-look="aurora"] ::selection {
+  background: color-mix(in srgb, #6366f1 28%, transparent);
+}
+
+html[data-look="aurora"] :focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+/* fields show focus with their own soft ring (below), not a second outline */
+html[data-look="aurora"] :is(input, select, textarea):not([type="checkbox"], [type="radio"]):focus-visible,
+html[data-look="aurora"] [data-ui="search"] :focus-visible {
+  outline: none;
+}
+
+html[data-look="aurora"] {
+  scrollbar-color: color-mix(in srgb, var(--muted) 35%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+/* ------------------------------------------------------------------ top bar: glass */
+html[data-look="aurora"] [data-ui="topbar"] {
+  background: color-mix(in srgb, var(--bg) 68%, transparent);
+  backdrop-filter: saturate(1.8) blur(18px);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+}
+
+/* the wordmark: italic serif in the spectrum */
+html[data-look="aurora"] [data-ui="topbar"] .display {
+  font-style: italic;
+  font-size: 1.5rem;
+  padding-right: 0.1em;
+  background: var(--grad-spectrum);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+html[data-look="aurora"] [data-ui="topbar"] a > svg {
+  filter: drop-shadow(0 4px 10px color-mix(in srgb, #6366f1 45%, transparent));
+}
+
+/* search: one soft capsule rather than a field and a button */
+html[data-look="aurora"] [data-ui="search"] input {
+  background: color-mix(in srgb, var(--card) 70%, transparent);
+  border-color: var(--border);
+  border-right: 0;
+  border-radius: 14px 0 0 14px;
+}
+
+html[data-look="aurora"] [data-ui="search"] button {
+  background: color-mix(in srgb, var(--card) 70%, transparent);
+  border-color: var(--border);
+  border-left: 0;
+  border-radius: 0 14px 14px 0;
+  color: var(--muted);
+}
+
+html[data-look="aurora"] [data-ui="search"]:focus-within {
+  border-radius: 14px;
+  box-shadow: var(--ring);
+}
+
+html[data-look="aurora"] [data-ui="search"]:focus-within :is(input, button) {
+  border-color: var(--brand);
+}
+
+/* ------------------------------------------------------------------ sidebar */
+/* Light: a frosted panel tinted with the indigo, so it belongs to the airy page.
+   Dark: an ink panel lit by one soft indigo glow at the top.
+   Its tokens are redefined on the panel itself, so everything inside (nav, badges, the
+   API status) follows. */
+html[data-look="aurora"] [data-ui="sidebar"] {
+  --bg: #ffffff;
+  --surface: rgba(99, 102, 241, 0.1);
+  --surface-hover: rgba(99, 102, 241, 0.07);
+  --text: #1e2042;
+  --muted: #6a6f93;
+  --border: rgba(99, 102, 241, 0.12);
+  --panel:
+    radial-gradient(120% 40% at 50% 0%, rgba(99, 102, 241, 0.1), transparent 70%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9) 0%, rgba(246, 246, 255, 0.82) 100%);
+  --panel-edge: rgba(99, 102, 241, 0.14);
+  --panel-shadow: 0 24px 50px -28px rgba(49, 46, 129, 0.35), 0 2px 6px rgba(49, 46, 129, 0.05);
+  color: var(--text);
+  background: var(--panel);
+  backdrop-filter: blur(20px) saturate(160%);
+  scrollbar-width: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  html[data-look="aurora"]:not([data-theme="light"]) [data-ui="sidebar"] {
+    --bg: #0c0d22;
+    --surface: rgba(129, 140, 248, 0.14);
+    --surface-hover: rgba(255, 255, 255, 0.05);
+    --text: #e3e5f8;
+    --muted: #8d92b8;
+    --border: rgba(255, 255, 255, 0.07);
+    --panel:
+      radial-gradient(120% 38% at 50% 0%, rgba(99, 102, 241, 0.26), transparent 70%),
+      linear-gradient(180deg, #14163a 0%, #0d0e24 100%);
+    --panel-edge: rgba(255, 255, 255, 0.07);
+    --panel-shadow: 0 24px 60px -24px rgba(0, 0, 0, 0.7);
+  }
+}
+
+html[data-look="aurora"][data-theme="dark"] [data-ui="sidebar"] {
+  --bg: #0c0d22;
+  --surface: rgba(129, 140, 248, 0.14);
+  --surface-hover: rgba(255, 255, 255, 0.05);
+  --text: #e3e5f8;
+  --muted: #8d92b8;
+  --border: rgba(255, 255, 255, 0.07);
+  --panel:
+    radial-gradient(120% 38% at 50% 0%, rgba(99, 102, 241, 0.26), transparent 70%),
+    linear-gradient(180deg, #14163a 0%, #0d0e24 100%);
+  --panel-edge: rgba(255, 255, 255, 0.07);
+  --panel-shadow: 0 24px 60px -24px rgba(0, 0, 0, 0.7);
+}
+
+/* on desktop it floats: inset from the edges, rounded, lifted */
+@media (min-width: 1024px) {
+  html[data-look="aurora"] [data-ui="sidebar"]:not([data-drawer]) {
+    top: calc(3.5rem + 6px);
+    left: 10px;
+    bottom: 10px;
+    width: calc(15rem - 18px);
+    border-radius: 20px;
+    padding-top: 10px;
+    box-shadow:
+      inset 0 0 0 1px var(--panel-edge),
+      var(--panel-shadow);
+  }
+
+  html[data-look="aurora"] [data-ui="sidebar"][data-expanded="false"] {
+    width: 56px;
+  }
+}
+
+html[data-look="aurora"] [data-ui="sidebar"] h2 {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+html[data-look="aurora"] [data-ui="sidebar"] a {
+  position: relative;
+  transition:
+    background-color 0.15s,
+    color 0.15s,
+    transform 0.15s;
+}
+
+html[data-look="aurora"] [data-ui="sidebar"] a:hover {
+  transform: translateX(1px);
+}
+
+html[data-look="aurora"] [data-ui="sidebar"] a[aria-current="page"] {
+  color: #ffffff;
+  background: linear-gradient(135deg, #6366f1 0%, #7c3aed 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    0 8px 18px -8px rgba(99, 102, 241, 0.75);
+}
+
+html[data-look="aurora"] [data-ui="sidebar"] a[aria-current="page"] svg {
+  color: #ffffff;
+}
+
+/* the lit edge on the current page (full sidebar only; the rail keeps its tooltips) */
+html[data-look="aurora"] [data-ui="sidebar"]:is([data-expanded="true"], [data-drawer]) a[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: -12px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: linear-gradient(180deg, #818cf8, #22d3ee);
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.8);
+}
+
+html[data-look="aurora"] [data-ui="sidebar"] .bg-accent {
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+/* ------------------------------------------------------------------ brand actions */
+/* Everything painted in the brand colour gets the gradient; buttons also get depth. */
+html[data-look="aurora"] .bg-brand {
+  background-image: var(--grad);
+  color: #ffffff;
+}
+
+html[data-look="aurora"] :is(button, a).bg-brand {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 8px 20px -8px rgba(99, 102, 241, 0.75);
+  transition:
+    transform 0.15s,
+    box-shadow 0.2s,
+    filter 0.2s;
+}
+
+html[data-look="aurora"] :is(button, a).bg-brand:hover:not(:disabled) {
+  filter: brightness(1.08) saturate(1.1);
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 14px 28px -10px rgba(99, 102, 241, 0.85);
+}
+
+html[data-look="aurora"] :is(button, a).bg-brand:active:not(:disabled) {
+  transform: translateY(0) scale(0.98);
+}
+
+/* ------------------------------------------------------------------ dialogs and menus */
+html[data-look="aurora"] [data-ui="scrim"] {
+  background: rgba(8, 9, 28, 0.42);
+  backdrop-filter: blur(6px);
+  animation: aurora-fade 0.2s ease-out backwards;
+}
+
+html[data-look="aurora"] [role="dialog"] {
+  background: color-mix(in srgb, var(--card) 94%, transparent);
+  border-radius: 24px;
+  padding: 1.6rem;
+  box-shadow:
+    0 0 0 1px var(--border),
+    var(--shadow-float);
+  animation: aurora-pop 0.24s cubic-bezier(0.2, 0.9, 0.3, 1.15) backwards;
+}
+
+/* menus open from the glass top bar, whose own blur stops theirs reaching the page, so
+   they are solid rather than see-through */
+html[data-look="aurora"] [role="menu"] {
+  background: var(--card);
+  border-radius: 16px;
+  box-shadow:
+    0 0 0 1px var(--border),
+    var(--shadow-lift);
+  animation: aurora-drop 0.16s ease-out backwards;
+}
+
+/* ------------------------------------------------------------------ sign-in: a glass card */
+html[data-look="aurora"] [data-ui="auth"] {
+  max-width: 27rem;
+  margin-top: 7vh;
+  margin-bottom: 7vh;
+  padding: 2.5rem 2rem 2rem;
+  border-radius: 28px;
+  background: color-mix(in srgb, var(--card) 72%, transparent);
+  backdrop-filter: blur(18px);
+  box-shadow:
+    0 0 0 1px var(--border),
+    var(--shadow-float);
+  animation: aurora-rise 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
+}
+
+html[data-look="aurora"] [data-ui="auth"] h1 {
+  font-size: 2.3rem;
+}
+
+/* pages come in with a short rise when you move between them. Every animation here fills
+   "backwards" only: a transform left applied after the animation would make the page a
+   containing block, and fixed overlays inside it (dialogs) would be trapped in it. */
+html[data-look="aurora"] [data-ui="main"] > * {
+  animation: aurora-rise 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
+}
+
+/* ------------------------------------------------------------------ defaults (utilities win) */
+@layer components {
+  /* cards: white on the tinted canvas, with a soft shadow instead of just a line */
+  html[data-look="aurora"] main :is(.rounded-xl, .rounded-2xl).border {
+    background-color: var(--card);
+    box-shadow: var(--shadow-card);
+    border-radius: 16px;
+  }
+
+  html[data-look="aurora"] main a:is(.rounded-xl, .rounded-2xl).border {
+    transition:
+      transform 0.18s,
+      box-shadow 0.2s,
+      border-color 0.2s;
+  }
+
+  html[data-look="aurora"] main a:is(.rounded-xl, .rounded-2xl).border:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-lift);
+    border-color: color-mix(in srgb, var(--brand) 35%, var(--border));
+  }
+
+  html[data-look="aurora"] :is(input, select, textarea):not([type="checkbox"], [type="radio"]) {
+    background-color: var(--card);
+    border-radius: 12px;
+    transition:
+      border-color 0.15s,
+      box-shadow 0.15s;
+  }
+
+  html[data-look="aurora"] :is(input, select, textarea):not([type="checkbox"], [type="radio"]):focus {
+    border-color: var(--brand);
+    box-shadow: var(--ring);
+  }
+
+  html[data-look="aurora"] :is(input[type="checkbox"], input[type="radio"]) {
+    accent-color: #6366f1;
+  }
+
+  html[data-look="aurora"] :is(button, a) {
+    transition:
+      background-color 0.15s,
+      border-color 0.15s,
+      color 0.15s,
+      box-shadow 0.2s;
+  }
+
+  /* outlined buttons read as raised chips */
+  html[data-look="aurora"] button.rounded-full.border-line {
+    background-color: var(--card);
+    box-shadow: 0 1px 2px rgba(16, 18, 50, 0.06);
+  }
+
+  html[data-look="aurora"] main thead {
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+  }
+
+  html[data-look="aurora"] main tbody tr {
+    transition: background-color 0.12s;
+  }
+
+  html[data-look="aurora"] main tbody tr:hover {
+    background-color: color-mix(in srgb, var(--surface) 70%, transparent);
+  }
+}
+
+/* ------------------------------------------------------------------ motion */
+@keyframes aurora-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes aurora-pop {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes aurora-drop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes aurora-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-look="aurora"] :is([data-ui="main"] > *, [data-ui="auth"], [data-ui="scrim"], [role="dialog"], [role="menu"]) {
+    animation: none;
+  }
+
+  html[data-look="aurora"] :is(button, a) {
+    transform: none !important;
+  }
+}

@@ -114,6 +114,7 @@ export function Sidebar({
             key={href}
             href={href}
             aria-label={label}
+            aria-current={isActive(href) ? "page" : undefined}
             className={`group relative flex h-12 w-12 items-center justify-center rounded-lg hover:bg-surface-hover ${
               isActive(href) ? "bg-surface text-brand" : ""
             }`}
@@ -211,6 +212,7 @@ function Section({
           key={href}
           href={href}
           onClick={onNavigate}
+          aria-current={isActive(href) ? "page" : undefined}
           className={`flex items-center gap-5 rounded-lg px-3 py-2 hover:bg-surface-hover ${
             isActive(href) ? "bg-surface font-semibold" : ""
           }`}

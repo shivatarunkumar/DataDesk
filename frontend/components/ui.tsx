@@ -129,7 +129,7 @@ export function Dialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <button type="button" aria-label="Close" className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <button type="button" aria-label="Close" data-ui="scrim" className="absolute inset-0 bg-black/50" onClick={onClose} />
       <div
         ref={panel}
         role="dialog"

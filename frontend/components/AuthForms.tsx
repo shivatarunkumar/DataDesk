@@ -11,7 +11,7 @@ type FieldErrors = Partial<Record<string, string>>;
 
 function Shell({ title, subtitle, children }: { title: string; subtitle: ReactNode; children: ReactNode }) {
   return (
-    <div className="mx-auto w-full max-w-sm px-4 py-12">
+    <div data-ui="auth" className="mx-auto w-full max-w-sm px-4 py-12">
       <div className="mb-8 flex flex-col items-center gap-3 text-center">
         <LogoMark width={44} height={33} />
         <h1 className="text-2xl tracking-tight">{title}</h1>

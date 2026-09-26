@@ -3,13 +3,24 @@
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { type FormEvent, useEffect, useState } from "react";
-import type { Theme } from "@/lib/theme";
+import type { Look, Theme } from "@/lib/theme";
 import type { SessionUser } from "@/lib/types";
 import { AccountMenu } from "./AccountMenu";
+import { LookPicker } from "./LookPicker";
 import { ThemeToggle } from "./ThemeToggle";
 import { LogoMark, MenuIcon, SearchIcon } from "./icons";
 
-export function TopBar({ onMenu, user, theme }: { onMenu?: () => void; user: SessionUser | null; theme: Theme }) {
+export function TopBar({
+  onMenu,
+  user,
+  theme,
+  look,
+}: {
+  onMenu?: () => void;
+  user: SessionUser | null;
+  theme: Theme;
+  look: Look;
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const current = useSearchParams().get("q") ?? "";
@@ -25,7 +36,7 @@ export function TopBar({ onMenu, user, theme }: { onMenu?: () => void; user: Ses
   }
 
   return (
-    <header className="fixed inset-x-0 top-0 z-40 flex h-14 items-center justify-between gap-4 bg-bg px-4">
+    <header data-ui="topbar" className="fixed inset-x-0 top-0 z-40 flex h-14 items-center justify-between gap-4 bg-bg px-4">
       <div className="flex shrink-0 items-center gap-3">
         {onMenu && (
           <button
@@ -45,7 +56,7 @@ export function TopBar({ onMenu, user, theme }: { onMenu?: () => void; user: Ses
       </div>
 
       {user && pathname !== "/login" && (
-        <form onSubmit={submit} role="search" className="hidden max-w-xl flex-1 sm:flex">
+        <form onSubmit={submit} role="search" data-ui="search" className="hidden max-w-xl flex-1 sm:flex">
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -64,6 +75,7 @@ export function TopBar({ onMenu, user, theme }: { onMenu?: () => void; user: Ses
       )}
 
       <div className="flex items-center gap-1">
+        <LookPicker look={look} />
         <ThemeToggle theme={theme} />
         <AccountMenu user={user} />
       </div>

@@ -1,4 +1,7 @@
 @import "tailwindcss";
+/* Other looks. Each is scoped to html[data-look="…"]; without that attribute this is OG. */
+@import "./looks/aurora.css";
+@import "./looks/glass.css";
 
 /* DataDesk shares KnowHub's palette: a deep forest green with warm cream surfaces, a lime
    accent for highlights, and a serif for display type. Every colour is a token —
