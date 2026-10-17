@@ -15,6 +15,7 @@ const SECTIONS = [
   { id: "onboarding", label: "Onboarding & contracts" },
   { id: "studio", label: "Data Studio in depth" },
   { id: "file-upload", label: "File upload (Cloud Run)" },
+  { id: "convertor", label: "Convertor" },
   { id: "roles", label: "Who can do what" },
   { id: "architecture", label: "Architecture" },
   { id: "storage", label: "Where things are stored" },
@@ -207,8 +208,9 @@ export function About() {
             </p>
             <p className="mt-2">
               The dataset and table are visible, the account holds read and write permissions, it can run query and load
-              jobs, and, for upsert, it can create the temporary staging table an upsert uses. With File upload on, it can
-              also write to Cloud Run&apos;s config and landing buckets and read its audit tables.
+              jobs, and, for upsert, it can create the temporary staging table an upsert uses. Because every file loads
+              through Cloud Run, it also checks DataDesk can write to Cloud Run&apos;s config and landing buckets and
+              read its audit tables.
             </p>
             <p className="mt-2">
               Any check that fails names the role that fixes it. A table can&apos;t be onboarded until every check passes, and the API enforces this, not
@@ -245,27 +247,43 @@ export function About() {
               checks against the current one.
             </p>
             <p className="mt-2">
-              <b>One contract for both paths.</b> When an admin turns on <b>File upload (Cloud Run)</b> for a table, it also
-              sets the file name prefix, CSV and/or Excel, and append or overwrite. DataDesk then publishes the same contract
+              <b>One contract for both paths.</b> Every table loads files through Cloud Run. Onboarding also sets its file
+              name prefix, CSV and/or Excel, and whether files may append, overwrite or either (the sender then chooses).
+              DataDesk publishes the same contract
               to Cloud Run&apos;s config bucket whenever it changes, so DataDesk and Cloud Run always check the same rules.
               When Cloud Run already had a contract for the table, onboarding starts from its rules.
             </p>
 
             <h3 className="mt-6 font-semibold">Write modes</h3>
+            <p className="mt-2">
+              <b>Files</b> (File upload, or a file&apos;s Load to table tab) are loaded by Cloud Run:
+            </p>
             <ul className="mt-2 list-disc space-y-1.5 pl-5">
               <li>
-                <b>Append:</b> every row is inserted as a new row.
+                <b>Append:</b> the file&apos;s rows are added to the table.
               </li>
               <li>
-                <b>Upsert:</b> rows are matched on the key the admin chose when onboarding. A matching row is updated, and
-                any other row is inserted. BigQuery does this through a temporary staging table and one MERGE.
+                <b>Overwrite:</b> the file replaces every row of the table.
+              </li>
+            </ul>
+            <p className="mt-2">
+              The admin allows one or both per table. When both are allowed, the person sending the file chooses (append by
+              default).
+            </p>
+            <p className="mt-3">
+              <b>Data Studio edits</b> are written by DataDesk itself:
+            </p>
+            <ul className="mt-2 list-disc space-y-1.5 pl-5">
+              <li>
+                <b>Append:</b> new rows are inserted.
               </li>
               <li>
-                <b>Edit in place</b> (Data Studio only, on tables that allow upsert): the changed rows are updated where they
-                are. See the next section.
+                <b>Upsert:</b> rows are matched on the key the admin chose; a match is updated, the rest inserted (a
+                staging table and one MERGE).
               </li>
               <li>
-                <b>Overwrite</b> (File upload only, when the admin chose it): the file replaces every row of the table.
+                <b>Edit in place</b> (on tables that allow upsert): the changed rows are updated where they are. See Data
+                Studio below.
               </li>
             </ul>
             <p className="mt-2">
@@ -336,8 +354,8 @@ export function About() {
 
           <Section id="file-upload" title="File upload (Cloud Run)">
             <p>
-              File upload sends a file to BigQuery through the <b>Cloud Run file processor</b> instead of DataDesk loading
-              it: Cloud Storage landing bucket → Pub/Sub → Cloud Run → BigQuery. Cloud Run records every attempt in{" "}
+              Every file load, from the File upload tab or a file&apos;s Load to table tab, goes through the{" "}
+              <b>Cloud Run file processor</b>: Cloud Storage landing bucket → Pub/Sub → Cloud Run → BigQuery. Cloud Run records every attempt in{" "}
               <code>file_audit.job_metadata</code> and every check in <code>file_audit.validation_metadata</code>, and
               DataDesk reads those back to show what happened.
             </p>
@@ -345,13 +363,13 @@ export function About() {
             <ol className="mt-2 list-decimal space-y-2 pl-5">
               <li>
                 <b>Send.</b> Upload a CSV or Excel file (it is saved in <b>My files › File uploads</b>) or pick one from My
-                files, grouped by folder, then choose the dataset and table. Only tables with File upload turned on are
-                listed.
+                files, grouped by folder, then choose the dataset and table, and append or overwrite when the table
+                allows both.
               </li>
               <li>
-                <b>The file name.</b> Cloud Run finds the table by the file name, so the form shows what it expects, e.g.{" "}
-                <code>customer_YYYYMMDD.csv</code>. A file with another name keeps its own name in My files and lands as{" "}
-                <code>prefix_date.ext</code>; the date comes from a date in its name, or today, and can be changed.
+                <b>The file name.</b> Files land as the table&apos;s prefix plus a business date, e.g.{" "}
+                <code>customer_20261017.csv</code>. A file with another name keeps its own name in My files; the date comes
+                from a date in its name, or today, and can be changed.
               </li>
               <li>
                 <b>Checked here first,</b> exactly as Cloud Run will: CSV or Excel, comma-separated, every column of the
@@ -359,10 +377,11 @@ export function About() {
                 don&apos;t stop the file. Only a passing file becomes a request.
               </li>
               <li>
-                <b>Approve.</b> An admin approves it in Approvals. It is checked again against the current contract, then
-                copied to the landing bucket, and your copy moves to <b>My files › File uploads › Archive</b> so sent files
-                don&apos;t pile up. Approval waits about five minutes after a contract change, because Cloud Run
-                caches contracts for that long.
+                <b>Approve.</b> An admin approves it in Approvals, with no waiting. It is checked again against the current
+                contract, then copied to{" "}
+                <code>landing/datadesk/&lt;dataset&gt;.&lt;table&gt;/&lt;request&gt;/&lt;name&gt;</code>, tagged with the
+                load mode and the contract version it passed. Your copy moves to <b>My files › File uploads › Archive</b>{" "}
+                so sent files don&apos;t pile up.
               </li>
               <li>
                 <b>Follow it.</b> The request moves through Landing, Cloud Run (picked up, which attempt), Cloud Run checks
@@ -370,6 +389,27 @@ export function About() {
                 you and admins see the values). If nothing picks the file up within five minutes, it says so.
               </li>
             </ol>
+            <h3 className="mt-6 font-semibold">How Cloud Run gets the contract</h3>
+            <ul className="mt-2 list-disc space-y-1.5 pl-5">
+              <li>
+                Saving a table in Onboarding publishes its contract to Cloud Run&apos;s config bucket as{" "}
+                <code>contracts/&lt;dataset&gt;.&lt;table&gt;.yaml</code>.
+              </li>
+              <li>
+                The table folder in the landed file&apos;s path tells Cloud Run which contract to read: only that one, when
+                it is needed, however many tables there are.
+              </li>
+              <li>
+                Each Cloud Run instance caches the contracts it has read. A change in the config bucket notifies the{" "}
+                <code>contract-changes</code> topic, which calls Cloud Run&apos;s <code>/contracts</code> endpoint to read it
+                again straight away.
+              </li>
+              <li>
+                Because a file says which contract version it passed, any instance that still has an older copy reads the
+                new one before using it. Cached copies also expire after five minutes.
+              </li>
+            </ul>
+
             <h3 className="mt-6 font-semibold">DataDesk keeps the record</h3>
             <ul className="mt-2 list-disc space-y-1.5 pl-5">
               <li>
@@ -388,6 +428,29 @@ export function About() {
             </ul>
           </Section>
 
+          <Section id="convertor" title="Convertor">
+            <p>Turns an Excel workbook (.xlsx) into CSV files in My files.</p>
+            <ol className="mt-2 list-decimal space-y-1.5 pl-5">
+              <li>
+                Upload a workbook (saved in <b>My files › Convertor</b>) or pick one from My files.
+              </li>
+              <li>
+                <b>One sheet:</b> it becomes one CSV with the workbook&apos;s own name. <b>Several sheets:</b> tick the
+                ones you want; each becomes a CSV named after its sheet, or after the workbook and the sheet, or anything
+                you type. Each sheet shows its size and a preview of its first rows.
+              </li>
+              <li>
+                Choose the delimiter (comma, tab, semicolon or pipe) and the folder to save in (or make a new one), then
+                convert. A name already taken in that folder gets a number, e.g. <code>Customers (1).csv</code>.
+              </li>
+            </ol>
+            <p className="mt-2">
+              Cells are written the way Cloud Run reads Excel, so the CSVs pass File upload&apos;s checks: formulas give
+              their calculated value, dates become <code>2026-10-17</code>, <code>12.0</code> becomes <code>12</code>, and
+              empty rows are dropped. Old .xls files aren&apos;t supported: save them as .xlsx first.
+            </p>
+          </Section>
+
           <Section id="roles" title="Who can do what">
             <div className="overflow-hidden rounded-xl border border-line">
               <table className="w-full text-sm">
@@ -402,6 +465,7 @@ export function About() {
                   {(
                     [
                       ["Upload, edit, version and export your own files", true, true],
+                      ["Convert Excel sheets to CSV files", true, true],
                       ["Query onboarded tables in Data Studio", true, true],
                       ["Send data for approval (files, Data Studio edits, File upload)", true, true],
                       ["See every load request: who, what, where, the outcome", true, true],
@@ -538,7 +602,7 @@ export function About() {
             </div>
             <h3 className="mt-6 font-semibold">Repository</h3>
             <pre className="mt-2 overflow-x-auto rounded-xl border border-line bg-surface p-4 font-mono text-xs leading-5">{`backend/app/
-  api/v1/        routes: auth, workspace, studio, onboarding, requests, file_uploads, admin, health
+  api/v1/        routes: auth, workspace, studio, onboarding, requests, file_uploads, convertor, admin, health
   services/      the rules: validators, workspace, onboarding, reviews, studio, file_upload …
   adapters/      storage (GCS), bigquery, file_pipeline (Cloud Run), gcp (identity)
   models/ schemas/ core/
@@ -587,7 +651,7 @@ frontend/
               </li>
               <li>
                 <code>FILE_UPLOAD_LANDING_BUCKET</code>, <code>FILE_UPLOAD_CONFIG_BUCKET</code> (File upload is off while
-                they are empty), <code>FILE_UPLOAD_AUDIT_DATASET</code>, <code>FILE_UPLOAD_CONTRACT_TTL_SECONDS</code>,{" "}
+                they are empty), <code>FILE_UPLOAD_AUDIT_DATASET</code>,{" "}
                 <code>FILE_UPLOAD_PICKUP_MINUTES</code>, <code>FILE_UPLOAD_POLL_SECONDS</code>.
               </li>
               <li>
@@ -604,11 +668,12 @@ frontend/
                 ["Onboarded", "A target that has been approved for loads, with its data contract."],
                 ["Data contract", "The rules a table's data must follow, per column. Versioned."],
                 ["Load request", "Data waiting for (or past) an admin's decision to write it to a table."],
-                ["Append / Upsert", "Insert every row / update rows that match the key and insert the rest."],
+                ["Append / Overwrite", "How a file loads: add its rows / replace the whole table."],
+                ["Upsert", "Data Studio: update rows that match the key and insert the rest."],
+                ["Convertor", "Turns Excel sheets into CSV files in My files."],
                 ["Edit in place", "Data Studio's mode: update the edited rows where they are."],
                 ["File upload", "Sending a file to a table through the Cloud Run file processor."],
                 ["Landing bucket", "Where approved File upload files are put; a new file there starts Cloud Run."],
-                ["Overwrite", "File upload's other load mode: the file replaces every row of the table."],
                 ["Warn only", "A contract rule whose failures are shown but don't stop the file."],
                 ["Version", "A saved state of a file. Restoring one makes it the newest version."],
                 ["Test access", "The check that DataDesk itself can read and write a table."],

@@ -121,12 +121,22 @@ class GcsStorage:
         )
         return data
 
-    def copy_out(self, source: str, bucket: str, destination: str, content_type: str) -> str:
-        """Copy a workspace object into another bucket; returns the new object's generation."""
+    def copy_out(
+        self,
+        source: str,
+        bucket: str,
+        destination: str,
+        content_type: str,
+        metadata: dict[str, str] | None = None,
+    ) -> str:
+        """Copy a workspace object into another bucket, with its content type and custom
+        metadata; returns the new object's generation."""
         started = time.perf_counter()
         src = self._bucket().blob(source)
         dest = self.client().bucket(bucket).blob(destination)
         dest.content_type = content_type
+        if metadata:
+            dest.metadata = metadata
         token, _, _ = dest.rewrite(src)
         while token is not None:  # big objects are copied in several calls
             token, _, _ = dest.rewrite(src, token=token)

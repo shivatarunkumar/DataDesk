@@ -168,8 +168,8 @@ Edit contracts in DataDesk, not in the bucket.
 2. **Approve.** The admin approves it in Approvals, as with any load. It is checked again
    against the current contract, then copied to
    `gs://$FILE_UPLOAD_LANDING_BUCKET/$FILE_UPLOAD_LANDING_PREFIX/<request id>/<name>`.
-   Approval waits `FILE_UPLOAD_CONTRACT_TTL_SECONDS` after a contract change, because
-   Cloud Run caches contracts for that long.
+   The file carries its contract version and load mode as object metadata, so Cloud Run
+   uses the right contract at once, even right after a change.
 3. **Follow.** DataDesk finds Cloud Run's attempts by the landed object's URI and
    generation. The request moves to *completed* (rows loaded, file archived) or *failed*,
    showing Cloud Run's reason and the failing checks with sample rows. The request page

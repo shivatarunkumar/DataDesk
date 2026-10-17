@@ -21,7 +21,7 @@ from app.core.config import get_settings
 from app.models.targets import UploadTarget
 from app.models.user import User
 from app.models.workspace import UploadRequest
-from app.schemas.onboarding import Contract, TargetIn, TargetPatch
+from app.schemas.onboarding import Contract, FileUpload, TargetIn, TargetPatch
 from app.services import file_upload, loaders
 from app.services.errors import NotFound, ServiceError
 
@@ -143,14 +143,9 @@ def _contract_json(contract: Contract) -> dict:
         out["min_rows"] = contract.min_rows
     if contract.max_rows:
         out["max_rows"] = contract.max_rows
-    if contract.file_upload and (contract.file_upload.enabled or contract.file_upload.file_prefix):
-        out["file_upload"] = contract.file_upload.model_dump()
+    # every table takes files through Cloud Run: its prefix, formats and load mode
+    out["file_upload"] = (contract.file_upload or FileUpload()).model_dump(exclude={"enabled"})
     return out
-
-
-def _file_upload_on(contract: Contract) -> bool:
-    """Whether this contract sends files through Cloud Run (the File upload tab)."""
-    return bool(contract.file_upload and contract.file_upload.enabled)
 
 
 async def list_targets(
@@ -229,7 +224,7 @@ async def create_target(session: AsyncSession, user: User, body: TargetIn) -> Up
         body.write_modes,
         body.key_columns,
         probe_writes=is_admin,
-        file_upload=_file_upload_on(body.contract),
+        file_upload=True,
     )
 
     now = datetime.now(UTC)
@@ -279,16 +274,9 @@ async def update_target(
             "Pick the key columns that identify a row, or don't allow upsert", field="key_columns"
         )
 
-    # upsert needs more rights than append, and File upload needs the Cloud Run buckets:
-    # check again when what loads may do changes
+    # upsert needs more rights than append: check again when what loads may do changes
     modes_now = list(dict.fromkeys(write_modes))
-    was_file_upload = bool((target.contract or {}).get("file_upload", {}).get("enabled"))
-    file_upload_now = _file_upload_on(body.contract) if body.contract is not None else was_file_upload
-    loads_changed = (
-        modes_now != list(target.write_modes)
-        or key_columns != list(target.key_columns or [])
-        or (file_upload_now and not was_file_upload)
-    )
+    loads_changed = modes_now != list(target.write_modes) or key_columns != list(target.key_columns or [])
     if loads_changed and target.onboarding_status != "rejected":
         await require_access(
             target.database_name,
@@ -296,7 +284,7 @@ async def update_target(
             modes_now,
             key_columns,
             probe_writes=user.role == "admin",
-            file_upload=file_upload_now,
+            file_upload=True,
         )
 
     if body.contract is not None or body.key_columns is not None:
@@ -357,7 +345,7 @@ async def approve_target(
         list(target.write_modes),
         list(target.key_columns or []),
         probe_writes=True,
-        file_upload=bool((target.contract or {}).get("file_upload", {}).get("enabled")),
+        file_upload=True,
     )
     target.schema_snapshot = columns
     target.onboarding_status = "approved"

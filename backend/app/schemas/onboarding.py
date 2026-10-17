@@ -68,14 +68,16 @@ FILE_PREFIX = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$"
 
 
 class FileUpload(BaseModel):
-    """How files reach a BigQuery table through the Cloud Run file processor (File upload tab).
-    When enabled, the contract is published to Cloud Run's config bucket as YAML."""
+    """How files reach a table through the Cloud Run file processor. Every table takes files
+    this way, and its contract is published to Cloud Run's config bucket as YAML."""
 
-    enabled: bool = False
+    # always true now; kept so contracts saved while it was a switch still read
+    enabled: bool = True
     # files land as {file_prefix}_{YYYYMMDD}.{csv|xlsx}; Cloud Run maps the name to this table
     file_prefix: str | None = Field(default=None, pattern=FILE_PREFIX)
-    # append adds the rows; overwrite replaces the whole table with the file
-    load_mode: Literal["append", "overwrite"] = "append"
+    # what people may choose when they send a file: append adds the rows, overwrite replaces the
+    # whole table with the file. The first is the default.
+    load_modes: list[Literal["append", "overwrite"]] = Field(default_factory=lambda: ["append"], min_length=1)
     formats: list[Literal["csv", "xlsx"]] = Field(default_factory=lambda: ["csv", "xlsx"], min_length=1)
 
     @field_validator("file_prefix", mode="before")
@@ -85,10 +87,23 @@ class FileUpload(BaseModel):
         cleaned = (value or "").strip().rstrip("_-")
         return cleaned or None
 
-    @field_validator("formats")
+    @model_validator(mode="before")
+    @classmethod
+    def one_mode_is_a_list(cls, data):
+        """Contracts saved when a table had one load mode (load_mode) read as a list of one."""
+        if isinstance(data, dict) and "load_modes" not in data and data.get("load_mode"):
+            data = {**data, "load_modes": [data["load_mode"]]}
+        return data
+
+    @field_validator("formats", "load_modes")
     @classmethod
     def unique_formats(cls, value: list[str]) -> list[str]:
         return list(dict.fromkeys(value))
+
+    @property
+    def load_mode(self) -> str:
+        """The default load mode."""
+        return self.load_modes[0]
 
 
 class Contract(BaseModel):

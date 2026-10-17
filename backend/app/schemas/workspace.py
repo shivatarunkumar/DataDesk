@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -136,6 +137,8 @@ class FileUploadIn(BaseModel):
     target_id: uuid.UUID
     # the date in the landing name; empty → the one in the file's name, else today
     file_date: date | None = None
+    # append or overwrite, among the table's load modes; empty → its default
+    load_mode: Literal["append", "overwrite"] | None = None
     justification: str | None = Field(default=None, max_length=2000)
 
 
@@ -150,7 +153,9 @@ class FileUploadTarget(BaseModel):
     file_prefix: str
     # "customer_YYYYMMDD.csv or .xlsx"
     expected_name: str
+    # the default, and every mode a file may be sent with
     load_mode: str
+    load_modes: list[str]
     formats: list[str]
     contract: dict
     contract_version: int

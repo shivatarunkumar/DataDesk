@@ -66,9 +66,6 @@ class Settings(BaseSettings):
     file_upload_landing_prefix: str = "datadesk"
     # BigQuery dataset (in bq_project) holding job_metadata and validation_metadata
     file_upload_audit_dataset: str = "file_audit"
-    # how long Cloud Run caches contracts (its CONTRACT_CACHE_TTL_SECONDS): approving waits
-    # this long after a contract change, so the file isn't checked against the old one
-    file_upload_contract_ttl_seconds: int = 300
     # no Cloud Run job this long after landing → the request says it wasn't picked up
     file_upload_pickup_minutes: int = 5
     # Pub/Sub delivery attempts before the message goes to the dead-letter topic

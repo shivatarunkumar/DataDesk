@@ -67,13 +67,11 @@ ARCHIVE_FOLDER = ["File uploads", "Archive"]
 
 
 # ------------------------------------------------------------------ the contract, for Cloud Run
-def settings_of(target: UploadTarget) -> FileUpload | None:
-    """The table's File upload settings, when it takes files through Cloud Run."""
-    raw = (target.contract or {}).get("file_upload")
-    if not raw:
-        return None
-    fu = FileUpload.model_validate(raw)
-    return fu if fu.enabled and target.target_type == "bigquery" else None
+def settings_of(target: UploadTarget) -> FileUpload:
+    """How files reach the table through Cloud Run. Every table takes files this way; one
+    saved before the settings existed uses the defaults (its table name, CSV and Excel, append)."""
+    raw = (target.contract or {}).get("file_upload") or {}
+    return FileUpload.model_validate({**raw, "enabled": True})
 
 
 def prefix_of(target: UploadTarget, fu: FileUpload) -> str:
@@ -102,8 +100,6 @@ def contract_object(settings: Settings, target: UploadTarget) -> str:
 def cloud_run_contract(target: UploadTarget) -> dict:
     """The onboarding contract in Cloud Run's format (file-processor-service/app/models.py)."""
     fu = settings_of(target)
-    if fu is None:
-        raise ServiceError("This table doesn't take files through Cloud Run.")
     contract = target.contract or {}
     rules = {c["name"]: c for c in contract.get("columns", [])}
     prefix = prefix_of(target, fu)
@@ -134,6 +130,7 @@ def cloud_run_contract(target: UploadTarget) -> dict:
         "file_date_group": 1,
         "target_table": f"{target.database_name}.{target.table_name}",
         "load_mode": fu.load_mode,
+        "load_modes": fu.load_modes,
         "file_format": fu.formats,
         "delimiter": ",",
         "has_header": True,
@@ -158,12 +155,7 @@ def _sha(text: str) -> str:
 
 
 def should_publish(settings: Settings, target: UploadTarget) -> bool:
-    return (
-        settings.file_upload_enabled
-        and target.onboarding_status == "approved"
-        and target.is_active
-        and settings_of(target) is not None
-    )
+    return settings.file_upload_enabled and target.onboarding_status == "approved" and target.is_active
 
 
 def _publish_sync(settings: Settings, target: UploadTarget) -> dict | None:
@@ -280,7 +272,10 @@ def from_cloud_run(data: dict) -> tuple[Contract, list[str]]:
         min_rows=data.get("min_rows") if (data.get("min_rows") or 1) > 1 else None,
         max_rows=data.get("max_rows"),
         file_upload=FileUpload(
-            enabled=True, file_prefix=prefix, load_mode=data.get("load_mode") or "append", formats=formats
+            enabled=True,
+            file_prefix=prefix,
+            load_modes=data.get("load_modes") or [data.get("load_mode") or "append"],
+            formats=formats,
         ),
     )
     return contract, notes
@@ -322,6 +317,7 @@ def target_option(target: UploadTarget) -> dict:
         "file_prefix": prefix_of(target, fu),
         "expected_name": expected_name(target, fu),
         "load_mode": fu.load_mode,
+        "load_modes": fu.load_modes,
         "formats": fu.formats,
         "contract": target.contract,
         "contract_version": target.contract_version,
@@ -340,7 +336,7 @@ async def targets(session: AsyncSession) -> list[dict]:
         )
         .order_by(UploadTarget.display_name)
     )
-    return [target_option(t) for t in rows if settings_of(t) is not None]
+    return [target_option(t) for t in rows]
 
 
 # ------------------------------------------------------------------ naming
@@ -440,6 +436,7 @@ async def check_file(
     version: int,
     target: UploadTarget,
     naming: Naming,
+    mode: str | None = None,
 ) -> dict:
     """The report Cloud Run's own checks would give, as far as DataDesk can tell before it lands."""
     fu = settings_of(target)
@@ -488,7 +485,7 @@ async def check_file(
         "name_matched": naming.matched,
         "original_name": file.original_name,
         "expected_name": naming.expected,
-        "load_mode": fu.load_mode,
+        "load_mode": mode or fu.load_mode,
     }
     return report
 
@@ -499,10 +496,7 @@ async def _pipeline_target(
     target = await session.get(UploadTarget, target_id) if target_id else None
     if target is None or not target.is_open:
         raise ServiceError("That table is no longer open for file uploads.", status_code=404)
-    fu = settings_of(target)
-    if fu is None:
-        raise ServiceError(f"{target.display_name} doesn't take files through Cloud Run.", status_code=409)
-    return target, fu
+    return target, settings_of(target)
 
 
 async def create_request(
@@ -513,14 +507,18 @@ async def create_request(
     target_id: uuid.UUID,
     file_date: date | None,
     justification: str | None,
+    load_mode: str | None = None,
 ) -> tuple[UploadRequest | None, WorkspaceFile, dict, UploadTarget]:
     """Check the file as Cloud Run will and, when it passes, file a request for an admin."""
     if not settings.file_upload_enabled:
         raise ServiceError("File upload is switched off: set FILE_UPLOAD_* in .env.", status_code=503)
     file = await ws.owned_file(session, file_id, user.id)
     target, fu = await _pipeline_target(session, target_id)
+    mode = load_mode or fu.load_mode
+    if mode not in fu.load_modes:
+        raise ServiceError(f"{target.display_name} doesn't take {mode} loads.", field="load_mode")
     naming = name_file(target, fu, file.original_name, file.format, file_date)
-    report = await check_file(session, settings, file, file.current_version, target, naming)
+    report = await check_file(session, settings, file, file.current_version, target, naming, mode)
     if not report["passed"]:
         log.info(
             "file upload check failed: %s → %s: %s", file.original_name, target.location, report["summary"]
@@ -534,7 +532,7 @@ async def create_request(
         target_type="bigquery",
         target_database=target.database_name,
         target_table=target.table_name,
-        write_mode=fu.load_mode,
+        write_mode=mode,
         justification=(justification or "").strip() or None,
         validation_status="passed",
         validation_report=report,
@@ -554,7 +552,7 @@ async def create_request(
         target.location,
         naming.landing_name,
         target.contract_version,
-        fu.load_mode,
+        mode,
     )
     return request, file, report, target
 
@@ -577,9 +575,9 @@ async def approve(
             status_code=409,
         )
 
-    # Approving never publishes. It checks what Cloud Run actually reads: the contract in the
-    # config bucket must be this table's current one, written long enough ago that Cloud Run
-    # has dropped any older copy from its cache
+    # Approving never publishes. It checks what Cloud Run reads: the contract in the config
+    # bucket must be this table's current one. No waiting for Cloud Run's cache: the file carries
+    # its contract version, and Cloud Run re-reads a cached contract of another version.
     current = contract_yaml(target)
     try:
         live = await asyncio.to_thread(file_pipeline.read_contract, contract_object(settings, target))
@@ -588,7 +586,7 @@ async def approve(
     if live is None or _sha(live[0]) != _sha(current):
         raise ServiceError(
             "Cloud Run doesn't have this table's current contract. Open the table in Onboarding and "
-            "save it to publish it, then approve after the wait.",
+            "save it to publish it, then approve again.",
             status_code=409,
         )
     since = live[1]
@@ -600,15 +598,6 @@ async def approve(
             "published_at": since.isoformat(),
             "sha": _sha(current),
         }
-    ready = since + timedelta(seconds=settings.file_upload_contract_ttl_seconds)
-    if datetime.now(UTC) < ready:
-        wait = max(1, int((ready - datetime.now(UTC)).total_seconds() // 60) + 1)
-        raise ServiceError(
-            f"The contract was published {_ago(since)}; Cloud Run picks up contract changes within "
-            f"{settings.file_upload_contract_ttl_seconds // 60} minutes. "
-            f"Approve again in about {wait} minute(s).",
-            status_code=409,
-        )
 
     file = await session.get(WorkspaceFile, request.file_id)
     if file is None or file.status != "active":
@@ -618,8 +607,16 @@ async def approve(
     request.reviewed_by = admin.id
     request.reviewed_at = datetime.now(UTC)
 
+    if request.write_mode not in fu.load_modes:
+        raise ServiceError(
+            f"{target.display_name} no longer takes {request.write_mode} loads. "
+            "Reject this and send it again.",
+            status_code=409,
+        )
     naming = Naming(request.landing_name, request.file_date, False, expected_name(target, fu))
-    report = await check_file(session, settings, file, request.file_version, target, naming)
+    report = await check_file(
+        session, settings, file, request.file_version, target, naming, request.write_mode
+    )
     if not report["passed"]:
         request.status = "failed"
         request.validation_status = "failed"
@@ -641,7 +638,15 @@ async def approve(
         f"{request.id}/{request.landing_name}"
     )
     try:
-        uri, generation = await asyncio.to_thread(file_pipeline.land, path, name, FORMAT_TYPES[file.format])
+        # the chosen mode travels with the file: Cloud Run reads it from the object's metadata
+        uri, generation = await asyncio.to_thread(
+            file_pipeline.land,
+            path,
+            name,
+            FORMAT_TYPES[file.format],
+            # what Cloud Run reads from the object: the mode, and the contract version it was checked with
+            {"load_mode": request.write_mode, "contract_version": str(target.contract_version)},
+        )
     except Exception as exc:
         request.status = "failed"
         request.result = {"error": f"Could not put the file in the landing bucket: {exc}"}
@@ -685,11 +690,6 @@ async def _archive(session: AsyncSession, file: WorkspaceFile) -> list[str]:
         log.warning("could not archive %s after landing: %s", file.original_name, exc)
         return []
     return out.stale_objects
-
-
-def _ago(when: datetime) -> str:
-    seconds = int((datetime.now(UTC) - when).total_seconds())
-    return f"{seconds} seconds ago" if seconds < 90 else f"{seconds // 60} minutes ago"
 
 
 # ------------------------------------------------------------------ following Cloud Run
@@ -996,6 +996,36 @@ def visible_pipeline(pipeline: dict | None, *, full: bool) -> dict | None:
         for c in pipeline.get("checks", [])
     ]
     return {**pipeline, "checks": checks}
+
+
+# ------------------------------------------------------------------ publishing at startup
+async def publish_all(settings: Settings) -> None:
+    """Make sure Cloud Run has the contract of every open table (tables onboarded before every
+    table took files, or published while Cloud Run's bucket was unreachable). Unchanged
+    contracts aren't rewritten."""
+    from app.core.db import get_sessionmaker
+
+    if not settings.file_upload_enabled:
+        return
+    async with get_sessionmaker()() as session:
+        targets = list(
+            await session.scalars(
+                select(UploadTarget).where(
+                    UploadTarget.onboarding_status == "approved", UploadTarget.is_active.is_(True)
+                )
+            )
+        )
+        published = 0
+        for target in targets:
+            before = (target.contract_published or {}).get("sha")
+            try:
+                await publish_contract(settings, target)
+            except Exception as exc:  # one table's problem doesn't stop the others
+                log.warning("publishing the contract of %s at startup failed: %s", target.location, exc)
+                continue
+            published += (target.contract_published or {}).get("sha") != before
+        await session.commit()
+    log.info("contracts: %d of %d open tables (re)published to Cloud Run", published, len(targets))
 
 
 # ------------------------------------------------------------------ the background poller

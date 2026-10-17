@@ -70,14 +70,22 @@ export type ColumnRule = {
   severity?: "error" | "warning";
 };
 
-/** How files reach a BigQuery table through the Cloud Run file processor (File upload). */
+export type LoadMode = "append" | "overwrite";
+
+/** How files reach a table through the Cloud Run file processor. Every table takes files. */
 export type FileUploadSettings = {
-  enabled: boolean;
   /** files land as {file_prefix}_{YYYYMMDD}.{csv|xlsx}; empty → the table name */
   file_prefix: string | null;
-  load_mode: "append" | "overwrite";
+  /** what people may choose when sending a file; the first is the default */
+  load_modes?: LoadMode[];
+  /** contracts saved before a table could allow both */
+  load_mode?: LoadMode;
   formats: ("csv" | "xlsx")[];
 };
+
+/** A table's allowed load modes, from either way a contract stored them. */
+export const loadModesOf = (fu: FileUploadSettings | null | undefined): LoadMode[] =>
+  fu?.load_modes?.length ? fu.load_modes : fu?.load_mode ? [fu.load_mode] : ["append"];
 
 export type Contract = {
   columns: ColumnRule[];
@@ -292,7 +300,9 @@ export type FileUploadTarget = {
   file_prefix: string;
   /** "customer_YYYYMMDD.csv or .xlsx" */
   expected_name: string;
-  load_mode: "append" | "overwrite";
+  /** the default, and every mode a file may be sent with */
+  load_mode: LoadMode;
+  load_modes: LoadMode[];
   formats: ("csv" | "xlsx")[];
   contract: Contract;
   contract_version: number;

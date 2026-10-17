@@ -68,7 +68,14 @@ async def create(
     settings: Settings = Depends(get_settings),
 ):
     request, file, report, target = await file_upload.create_request(
-        session, settings, user, body.file_id, body.target_id, body.file_date, body.justification
+        session,
+        settings,
+        user,
+        body.file_id,
+        body.target_id,
+        body.file_date,
+        body.justification,
+        body.load_mode,
     )
     if request is None:
         response.status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
@@ -79,7 +86,7 @@ async def create(
             target_type="bigquery",
             target_database=target.database_name,
             target_table=target.table_name,
-            write_mode=file_upload.settings_of(target).load_mode,
+            write_mode=report["pipeline"]["load_mode"],
             justification=body.justification,
             validation_status="failed",
             validation_report=report,

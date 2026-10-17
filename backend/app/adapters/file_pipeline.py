@@ -61,11 +61,11 @@ def delete_contract(name: str) -> None:
 
 
 # ------------------------------------------------------------------ landing bucket
-def land(source_path: str, name: str, content_type: str) -> tuple[str, str]:
-    """Copy a workspace object into the landing bucket. Returns (gs:// URI, generation).
-    The object's arrival is what triggers Cloud Run."""
+def land(source_path: str, name: str, content_type: str, metadata: dict[str, str]) -> tuple[str, str]:
+    """Copy a workspace object into the landing bucket, with custom metadata Cloud Run reads
+    (load_mode). Returns (gs:// URI, generation). The object's arrival triggers Cloud Run."""
     bucket = get_settings().file_upload_landing_bucket
-    generation = get_storage().copy_out(source_path, bucket, name, content_type)
+    generation = get_storage().copy_out(source_path, bucket, name, content_type, metadata)
     log.info("landed gs://%s/%s (generation %s)", bucket, name, generation)
     return f"gs://{bucket}/{name}", generation
 

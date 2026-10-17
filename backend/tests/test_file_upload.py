@@ -105,10 +105,9 @@ def test_prefix_defaults_to_the_table_name():
     [
         {"is_active": False},
         {"onboarding_status": "pending"},
-        {"contract": {**CONTRACT, "file_upload": {**CONTRACT["file_upload"], "enabled": False}}},
     ],
 )
-def test_only_open_bigquery_tables_with_file_upload_are_published(overrides):
+def test_only_open_tables_are_published(overrides):
     settings = type("S", (), {"file_upload_enabled": True})()
     assert file_upload.should_publish(settings, target()) is True
     assert file_upload.should_publish(settings, target(**overrides)) is False
@@ -424,3 +423,23 @@ def test_another_generation_of_the_same_name_is_not_this_request(monkeypatch):
     other = {"job_id": "j9", "status": "SUCCESS", "file_path": r.landing_uri, "file_generation": "999"}
     run_refresh(monkeypatch, [r], jobs=[other])
     assert r.status == "approved" and r.pipeline["jobs"] == []
+
+
+# ------------------------------------------------------------------ append and overwrite
+def test_a_table_can_take_both_load_modes_and_the_first_is_the_default():
+    contract = {**CONTRACT, "file_upload": {"file_prefix": "customer", "load_modes": ["overwrite", "append"]}}
+    out = file_upload.cloud_run_contract(target(contract=contract))
+    assert (out["load_mode"], out["load_modes"]) == ("overwrite", ["overwrite", "append"])
+
+
+def test_a_contract_saved_with_one_load_mode_still_reads():
+    fu = file_upload.settings_of(target(contract={**CONTRACT, "file_upload": {"load_mode": "overwrite"}}))
+    assert (fu.load_modes, fu.load_mode) == (["overwrite"], "overwrite")
+
+
+def test_a_table_saved_before_every_table_took_files_uses_the_defaults():
+    fu = file_upload.settings_of(target(contract={"columns": []}))
+    assert (fu.file_prefix, fu.load_modes, fu.formats) == (None, ["append"], ["csv", "xlsx"])
+    assert file_upload.cloud_run_contract(target(contract={"columns": []}))["file_pattern"].startswith(
+        "^customer_"
+    )

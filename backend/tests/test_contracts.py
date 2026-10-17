@@ -124,6 +124,8 @@ def test_stored_contract_keeps_only_real_rules():
     assert _contract_json(contract) == {
         "columns": [{"name": "email", "unique": True, "enum": ["a"]}],
         "max_rows": 100,
+        # every table takes files through Cloud Run: its defaults are stored too
+        "file_upload": {"file_prefix": None, "load_modes": ["append"], "formats": ["csv", "xlsx"]},
     }
 
 

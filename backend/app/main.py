@@ -28,12 +28,17 @@ async def lifespan(app: FastAPI):
         settings.bq_project if settings.bq_enabled else "off",
     )
     # File upload: save Cloud Run's outcomes as they happen, not only when someone looks
+    # every open table's contract is with Cloud Run (unchanged ones aren't rewritten)
+    publisher = (
+        asyncio.create_task(file_upload.publish_all(settings)) if settings.file_upload_enabled else None
+    )
     poller = None
     if settings.file_upload_enabled and settings.file_upload_poll_seconds > 0:
         poller = asyncio.create_task(file_upload.poll_forever(settings))
     yield
-    if poller:
-        poller.cancel()
+    for task in (poller, publisher):
+        if task:
+            task.cancel()
     log.info("DataDesk API stopping")
     await get_engine().dispose()
 

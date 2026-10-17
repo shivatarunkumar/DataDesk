@@ -4,7 +4,15 @@ import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api, errorText } from "@/lib/api";
 import { humanSize, timeAgo } from "@/lib/format";
-import type { FileUploadConfig, FileUploadTarget, Folder, UploadRequest, ValidationReport, WsFile } from "@/lib/types";
+import type {
+  FileUploadConfig,
+  FileUploadTarget,
+  Folder,
+  LoadMode,
+  UploadRequest,
+  ValidationReport,
+  WsFile,
+} from "@/lib/types";
 import { ContractSummary } from "./ContractSummary";
 import { uploadWithProgress } from "./FileBrowser";
 import {
@@ -75,7 +83,7 @@ export function FileUploadPage({ isAdmin = false }: { isAdmin?: boolean }) {
         <div>
           {config.targets.length === 0 ? (
             <Alert tone="info">
-              No tables take files yet. Admins turn this on in{" "}
+              No tables are onboarded yet. Ask for one in{" "}
               <Link href="/onboarding" className="font-medium underline">
                 Onboarding
               </Link>
@@ -113,11 +121,11 @@ export function SendFile({ file }: { file: WsFile }) {
   if (config.targets.length === 0)
     return (
       <Alert tone="info">
-        No table takes files yet. An admin turns it on per table under{" "}
+        No tables are onboarded yet. Ask for one in{" "}
         <Link href="/onboarding" className="font-medium underline">
           Onboarding
-        </Link>{" "}
-        → File upload (Cloud Run).
+        </Link>
+        .
       </Alert>
     );
   return (
@@ -144,6 +152,8 @@ function FileUploadForm({
   const [dataset, setDataset] = useState("");
   const [targetId, setTargetId] = useState("");
   const [fileDate, setFileDate] = useState(today());
+  // append or overwrite, when the table allows both; null → the table's default
+  const [loadMode, setLoadMode] = useState<LoadMode | null>(null);
   const [justification, setJustification] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -170,6 +180,7 @@ function FileUploadForm({
   }, [file]);
 
   const usable = (f: WsFile) => target?.formats.includes(f.format as "csv" | "xlsx") ?? (f.format === "csv" || f.format === "xlsx");
+  const mode: LoadMode = loadMode && target?.load_modes.includes(loadMode) ? loadMode : (target?.load_mode ?? "append");
   const name = target && file ? landingName(target.file_prefix, file.format, fileDate) : null;
   const matched = Boolean(name && file && name === file.original_name);
   const wrongFormat = Boolean(target && file && !target.formats.includes(file.format as "csv" | "xlsx"));
@@ -206,7 +217,13 @@ function FileUploadForm({
     try {
       const request = await api<UploadRequest>("/file-uploads", {
         method: "POST",
-        json: { file_id: file.id, target_id: target.target_id, file_date: fileDate, justification: justification.trim() || null },
+        json: {
+          file_id: file.id,
+          target_id: target.target_id,
+          file_date: fileDate,
+          load_mode: mode,
+          justification: justification.trim() || null,
+        },
       });
       setFiled(request);
       onFiled();
@@ -381,6 +398,7 @@ function FileUploadForm({
                 disabled={!dataset}
                 onChange={(e) => {
                   setTargetId(e.target.value);
+                  setLoadMode(null);
                   reset();
                 }}
               >
@@ -394,16 +412,35 @@ function FileUploadForm({
             </label>
           </div>
           {target?.description && <p className="mt-2 text-sm text-muted">{target.description}</p>}
-          {target && (
-            <p className="mt-2 text-sm">
-              <span className="rounded-full bg-surface px-2.5 py-1 text-xs font-medium">
-                {target.load_mode === "overwrite" ? "Overwrite" : "Append"}
-              </span>{" "}
-              <span className="text-muted">
-                {target.load_mode === "overwrite" ? "replaces all rows" : "adds rows"}
-              </span>
-            </p>
-          )}
+          {target &&
+            (target.load_modes.length > 1 ? (
+              <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
+                <div className="inline-flex rounded-full bg-surface p-1">
+                  {target.load_modes.map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setLoadMode(m)}
+                      className={`rounded-full px-4 py-1.5 font-medium ${
+                        mode === m ? "bg-chip-active text-chip-active-text" : "text-muted hover:text-fg"
+                      }`}
+                    >
+                      {m === "overwrite" ? "Overwrite" : "Append"}
+                    </button>
+                  ))}
+                </div>
+                <span className={mode === "overwrite" ? "text-warn" : "text-muted"}>
+                  {mode === "overwrite" ? "replaces all rows in the table" : "adds rows"}
+                </span>
+              </div>
+            ) : (
+              <p className="mt-2 text-sm">
+                <span className="rounded-full bg-surface px-2.5 py-1 text-xs font-medium">
+                  {mode === "overwrite" ? "Overwrite" : "Append"}
+                </span>{" "}
+                <span className="text-muted">{mode === "overwrite" ? "replaces all rows" : "adds rows"}</span>
+              </p>
+            ))}
         </fieldset>
 
         {/* the name Cloud Run expects */}

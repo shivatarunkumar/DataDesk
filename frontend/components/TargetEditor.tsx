@@ -15,6 +15,7 @@ import type {
   SourceTable,
   TableColumn,
 } from "@/lib/types";
+import { loadModesOf } from "@/lib/types";
 import { ArrowLeftIcon, CheckIcon, CloseIcon, SaveIcon, ShieldIcon, SpinnerIcon } from "./icons";
 import { ContractSummary } from "./ContractSummary";
 import { Alert, Dialog, Field, StatusPill, btn, inputClass } from "./ui";
@@ -48,7 +49,14 @@ const EMPTY: Draft = {
   severity: "error",
 };
 
-const NO_FILE_UPLOAD: FileUploadSettings = { enabled: false, file_prefix: null, load_mode: "append", formats: ["csv", "xlsx"] };
+const NO_FILE_UPLOAD: FileUploadSettings = { file_prefix: null, load_modes: ["append"], formats: ["csv", "xlsx"] };
+
+/** Stored settings (any age) as the form edits them. */
+const fileUploadFrom = (fu: FileUploadSettings | null | undefined): FileUploadSettings => ({
+  file_prefix: fu?.file_prefix ?? null,
+  load_modes: loadModesOf(fu),
+  formats: fu?.formats?.length ? fu.formats : ["csv", "xlsx"],
+});
 
 
 const cell = "h-8 w-full rounded-md border border-line bg-bg px-2 text-sm outline-none focus:border-brand";
@@ -152,7 +160,7 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
         setDrafts(Object.fromEntries(t.contract.columns.map((c) => [c.name, toDraft(c)])));
         setMaxRows(t.contract.max_rows ? String(t.contract.max_rows) : "");
         setMinRows(t.contract.min_rows ? String(t.contract.min_rows) : "");
-        setFileUpload({ ...NO_FILE_UPLOAD, ...(t.contract.file_upload ?? {}) });
+        setFileUpload(fileUploadFrom(t.contract.file_upload));
         setModes(t.write_modes);
         setKeys(t.key_columns);
         setActive(t.is_active);
@@ -204,7 +212,7 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
         setDrafts(Object.fromEntries(found.contract.columns.map((c) => [c.name, toDraft(c)])));
         setMinRows(found.contract.min_rows ? String(found.contract.min_rows) : "");
         setMaxRows(found.contract.max_rows ? String(found.contract.max_rows) : "");
-        setFileUpload({ ...NO_FILE_UPLOAD, ...(found.contract.file_upload ?? {}) });
+        setFileUpload(fileUploadFrom(found.contract.file_upload));
       })
       .catch((e) => setError(errorText(e)))
       .finally(() => setLoadingColumns(false));
@@ -236,10 +244,7 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
       columns: ruleColumns,
       min_rows: minRows.trim() ? Number(minRows) : null,
       max_rows: maxRows.trim() ? Number(maxRows) : null,
-      file_upload:
-        fileUpload.enabled || fileUpload.file_prefix
-          ? { ...fileUpload, file_prefix: fileUpload.file_prefix?.trim() || null }
-          : null,
+      file_upload: { ...fileUpload, file_prefix: fileUpload.file_prefix?.trim() || null },
     };
     try {
       if (editing && existing) {
@@ -319,7 +324,7 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
   }
 
   // a result is only true for the table, modes and key it was run with
-  const accessKey = `${database}|${tableKey}|${modes.join()}|${keys.join()}|${fileUpload.enabled}`;
+  const accessKey = `${database}|${tableKey}|${modes.join()}|${keys.join()}`;
   useEffect(() => setAccess(null), [accessKey]);
 
   async function testAccess() {
@@ -335,7 +340,7 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
             table_name: tableName,
             write_modes: modes,
             key_columns: keys,
-            file_upload: fileUpload.enabled,
+            file_upload: true,
           },
         }),
       );
@@ -354,8 +359,7 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
   const loadsChanged =
     !!existing &&
     (modes.join() !== existing.write_modes.join() ||
-      keys.join() !== existing.key_columns.join() ||
-      (fileUpload.enabled && !existing.contract.file_upload?.enabled));
+      keys.join() !== existing.key_columns.join());
   const needsAccess = !editing || reviewing || loadsChanged;
   const accessOk = access?.ok === true;
   const blocked = needsAccess && !accessOk;
@@ -749,8 +753,8 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
 
           <Section
             step={5}
-            title="File upload (Cloud Run)"
-            hint="Send files to this table through the Cloud Run file processor from the File upload tab. The contract above is published to Cloud Run, so both check the same rules."
+            title="File loads (Cloud Run)"
+            hint="Files reach this table through Cloud Run, which checks the same contract."
           >
             <FileUploadFields
               value={fileUpload}
@@ -858,90 +862,77 @@ function FileUploadFields({
 }) {
   const prefix = value.file_prefix?.trim().replace(/[_-]+$/, "") || table;
   const set = (patch: Partial<FileUploadSettings>) => onChange({ ...value, ...patch });
+  const modes = loadModesOf(value);
   return (
     <div className="flex flex-col gap-4">
-      <label className="flex items-start gap-2 text-sm">
-        <input
-          type="checkbox"
-          className="mt-0.5 h-4 w-4 accent-[var(--brand)]"
-          checked={value.enabled}
-          onChange={(e) => set({ enabled: e.target.checked })}
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field
+          label="File name prefix"
+          value={value.file_prefix ?? ""}
+          onChange={(v) => set({ file_prefix: v })}
+          placeholder={table}
+          hint={`Files land as ${prefix}_YYYYMMDD.${value.formats.join(" or .")}`}
         />
-        <span>
-          <span className="font-medium">Take files through Cloud Run</span>
-          <span className="block text-xs text-muted">
-            The table appears in File upload. Approved files go to the landing bucket and Cloud Run loads them.
-          </span>
-        </span>
-      </label>
-      {value.enabled && (
-        <>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field
-              label="File name prefix"
-              value={value.file_prefix ?? ""}
-              onChange={(v) => set({ file_prefix: v })}
-              placeholder={table}
-              hint={`Files land as ${prefix}_YYYYMMDD.${value.formats.join(" or .")} (the _ before the date is added for you)`}
-            />
-            <fieldset className="text-sm">
-              <legend className="mb-1.5 font-medium">Formats</legend>
-              <div className="flex gap-4 pt-2">
-                {(["csv", "xlsx"] as const).map((f) => (
-                  <label key={f} className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 accent-[var(--brand)]"
-                      checked={value.formats.includes(f)}
-                      onChange={(e) => {
-                        const next = e.target.checked ? [...value.formats, f] : value.formats.filter((x) => x !== f);
-                        if (next.length) set({ formats: next });
-                      }}
-                    />
-                    {f === "csv" ? "CSV" : "Excel (.xlsx)"}
-                  </label>
-                ))}
-              </div>
-            </fieldset>
+        <fieldset className="text-sm">
+          <legend className="mb-1.5 font-medium">Formats</legend>
+          <div className="flex gap-4 pt-2">
+            {(["csv", "xlsx"] as const).map((f) => (
+              <label key={f} className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-[var(--brand)]"
+                  checked={value.formats.includes(f)}
+                  onChange={(e) => {
+                    const next = e.target.checked ? [...value.formats, f] : value.formats.filter((x) => x !== f);
+                    if (next.length) set({ formats: next });
+                  }}
+                />
+                {f === "csv" ? "CSV" : "Excel (.xlsx)"}
+              </label>
+            ))}
           </div>
-          <fieldset className="text-sm">
-            <legend className="mb-1.5 font-medium">Load mode</legend>
-            <div className="flex flex-wrap gap-4">
-              {(
-                [
-                  ["append", "Append", "Every file's rows are added to the table"],
-                  ["overwrite", "Overwrite", "Each file replaces the whole table"],
-                ] as const
-              ).map(([m, label, hint]) => (
-                <label key={m} className="flex items-start gap-2">
-                  <input type="radio" className="mt-0.5" checked={value.load_mode === m} onChange={() => set({ load_mode: m })} />
-                  <span>
-                    <span className="font-medium">{label}</span>
-                    <span className="block text-xs text-muted">{hint}</span>
-                  </span>
-                </label>
-              ))}
-            </div>
-            <p className="mt-1.5 text-xs text-muted">People sending files can&apos;t change this.</p>
-          </fieldset>
-          <p className="text-xs text-muted">
-            The file needs every column of the table except Cloud Run&apos;s own (_job_id, _source_file, _loaded_at), in table
-            order, with a header row.
-          </p>
-        </>
-      )}
+        </fieldset>
+      </div>
+      <fieldset className="text-sm">
+        <legend className="mb-1.5 font-medium">Load modes</legend>
+        <div className="flex flex-wrap gap-6">
+          {(
+            [
+              ["append", "Append", "adds the file's rows"],
+              ["overwrite", "Overwrite", "replaces the whole table"],
+            ] as const
+          ).map(([m, label, hint]) => (
+            <label key={m} className="flex items-start gap-2">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 accent-[var(--brand)]"
+                checked={modes.includes(m)}
+                onChange={(e) => {
+                  const next = e.target.checked ? [...modes, m] : modes.filter((x) => x !== m);
+                  if (next.length) set({ load_modes: next, load_mode: undefined });
+                }}
+              />
+              <span>
+                <span className="font-medium">{label}</span>
+                <span className="block text-xs text-muted">{hint}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+        <p className="mt-1.5 text-xs text-muted">
+          {modes.length > 1 ? "People choose one when they send a file (append by default)." : "Every file loads this way."}
+        </p>
+      </fieldset>
       {published ? (
         <p className="flex items-start gap-2 text-sm text-ok">
           <CheckIcon width={16} height={16} className="mt-0.5 shrink-0" />
           <span>
-            Cloud Run has contract v{published.version}: <span className="break-all font-mono text-xs">{published.uri}</span>{" "}
+            Cloud Run has contract v{published.version}{" "}
             <span className="text-muted">· published {timeAgo(published.published_at)}</span>
           </span>
         </p>
       ) : (
-        value.enabled && (
-          <p className="text-xs text-muted">Published to Cloud Run when the table is saved, approved and open for loads.</p>
-        )
+        <p className="text-xs text-muted">Published to Cloud Run when the table is saved and open for loads.</p>
       )}
     </div>
   );
@@ -1055,19 +1046,14 @@ function TargetView({ target: t }: { target: OnboardedTarget }) {
         columns={t.schema_snapshot}
         version={t.onboarding_status === "approved" ? t.contract_version : null}
       />
-      {t.contract.file_upload?.enabled && (
-        <p className="mt-4 text-sm text-muted">
-          Takes files through Cloud Run from{" "}
-          <Link href="/file-upload" className="font-medium text-brand hover:underline">
-            File upload
-          </Link>{" "}
-          as{" "}
-          <span className="font-mono text-xs text-fg">
-            {t.contract.file_upload.file_prefix || t.table_name}_YYYYMMDD.{t.contract.file_upload.formats.join(" or .")}
-          </span>
-          , {t.contract.file_upload.load_mode === "overwrite" ? "replacing the table" : "appending rows"}.
-        </p>
-      )}
+      <p className="mt-4 text-sm text-muted">
+        Files land as{" "}
+        <span className="font-mono text-xs text-fg">
+          {t.contract.file_upload?.file_prefix || t.table_name}_YYYYMMDD.
+          {(t.contract.file_upload?.formats ?? ["csv", "xlsx"]).join(" or .")}
+        </span>{" "}
+        · {loadModesOf(t.contract.file_upload).join(" or ")}
+      </p>
     </div>
   );
 }
