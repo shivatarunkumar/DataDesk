@@ -9,15 +9,13 @@ import { ContractSummary } from "./ContractSummary";
 import { uploadWithProgress } from "./FileBrowser";
 import {
   CheckIcon,
-  ChevronDownIcon,
   CloseIcon,
-  FolderIcon,
   InfoIcon,
-  SearchIcon,
   SpinnerIcon,
   UploadIcon,
 } from "./icons";
 import { LoadFlow, stagesFor } from "./LoadFlow";
+import { FilePicker, useMyFiles } from "./MyFilePicker";
 import { ValidationReportView, WarningsView } from "./ValidationReport";
 import { RequestCard } from "./RequestList";
 import { Alert, EmptyState, btn, inputClass } from "./ui";
@@ -74,19 +72,14 @@ export function FileUploadPage({ isAdmin = false }: { isAdmin?: boolean }) {
   return (
     <>
       <section className="mb-8 rounded-2xl border border-line p-5">
-        <h2 className="display text-xl">Send a file</h2>
-        <p className="mt-1 text-sm text-muted">
-          It is checked here against the table&apos;s contract first, exactly as Cloud Run will check it. After an admin approves,
-          it goes to <span className="font-medium text-fg">gs://{config.landing_bucket}</span> and Cloud Run loads it.
-        </p>
-        <div className="mt-5">
+        <div>
           {config.targets.length === 0 ? (
             <Alert tone="info">
-              No table takes files through Cloud Run yet. An admin turns it on per table under{" "}
+              No tables take files yet. Admins turn this on in{" "}
               <Link href="/onboarding" className="font-medium underline">
                 Onboarding
-              </Link>{" "}
-              → File upload (Cloud Run).
+              </Link>
+              .
             </Alert>
           ) : (
             <FileUploadForm targets={config.targets} onFiled={() => setListKey((k) => k + 1)} />
@@ -128,14 +121,7 @@ export function SendFile({ file }: { file: WsFile }) {
       </Alert>
     );
   return (
-    <div>
-      <p className="mb-4 text-sm text-muted">
-        Version {file.current_version} is checked here exactly as Cloud Run will check it. After an admin approves, it goes
-        to <span className="font-medium text-fg">gs://{config.landing_bucket}</span> and Cloud Run loads it; the file then
-        moves to My files › File uploads › Archive.
-      </p>
-      <FileUploadForm targets={config.targets} onFiled={() => {}} fixedFile={file} />
-    </div>
+    <FileUploadForm targets={config.targets} onFiled={() => {}} fixedFile={file} />
   );
 }
 
@@ -154,9 +140,6 @@ function FileUploadForm({
 }) {
   const [source, setSource] = useState<Source>("new");
   const [file, setFile] = useState<WsFile | null>(fixedFile ?? null);
-  const [myFiles, setMyFiles] = useState<WsFile[] | null>(null);
-  // folder id → its path, to group the picker like My files
-  const [folders, setFolders] = useState<Record<string, string>>({});
   const [progress, setProgress] = useState<number | null>(null);
   const [dataset, setDataset] = useState("");
   const [targetId, setTargetId] = useState("");
@@ -168,32 +151,14 @@ function FileUploadForm({
   const [filed, setFiled] = useState<UploadRequest | null>(null);
   const picker = useRef<HTMLInputElement>(null);
 
-  // read afresh every time "From My files" is opened, so moves and new files show up
+  // My files, read afresh every time "From My files" is opened
+  const { files: myFiles, groups, reload: reloadMyFiles, error: filesError } = useMyFiles(
+    source === "existing",
+    (f) => f.format === "csv" || f.format === "xlsx",
+  );
   useEffect(() => {
-    if (source !== "existing" || myFiles) return;
-    Promise.all([api<WsFile[]>("/workspace/files"), api<Folder[]>("/workspace/folders")])
-      .then(([files, list]) => {
-        setFolders(Object.fromEntries(list.map((f) => [f.id, f.path])));
-        setMyFiles(files);
-      })
-      .catch((e) => setError(errorText(e)));
-  }, [source, myFiles]);
-
-  // the picker's groups: the top of My files first, then each folder by path
-  const groups = useMemo(() => {
-    const byFolder = new Map<string, WsFile[]>();
-    for (const f of myFiles ?? []) {
-      if (!(f.format === "csv" || f.format === "xlsx")) continue;
-      const path = f.folder_id ? (folders[f.folder_id] ?? "Other folder") : "";
-      byFolder.set(path, [...(byFolder.get(path) ?? []), f]);
-    }
-    return [...byFolder.entries()]
-      .sort(([a], [b]) => (a === "" ? -1 : b === "" ? 1 : a.localeCompare(b)))
-      .map(([path, files]) => ({
-        label: path ? path.replaceAll("/", " › ") : "My files (top level)",
-        files: files.sort((x, y) => x.original_name.localeCompare(y.original_name)),
-      }));
-  }, [myFiles, folders]);
+    if (filesError) setError(filesError);
+  }, [filesError]);
 
   const datasets = [...new Set(targets.map((t) => t.dataset))].sort();
   const tables = targets.filter((t) => t.dataset === dataset);
@@ -224,7 +189,7 @@ function FileUploadForm({
       // new uploads go to My files › File uploads, not the top of My files
       const folder = await api<Folder>("/file-uploads/folder", { method: "POST" });
       setFile(await uploadWithProgress(chosen, folder.id, setProgress));
-      setMyFiles(null); // the list is stale now
+      reloadMyFiles(); // the list is stale now
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -289,15 +254,15 @@ function FileUploadForm({
       <form onSubmit={submit} className="flex flex-col gap-5">
         {error && <Alert>{error}</Alert>}
 
-        {/* 1. the file */}
+        {/* the file */}
         <fieldset>
-          <legend className="mb-2 text-sm font-medium">1. The file</legend>
+          <legend className="mb-2 text-sm font-medium">Upload your file</legend>
           {!fixedFile && (
             <>
           <div className="inline-flex rounded-full bg-surface p-1">
             {(
               [
-                ["new", "Upload a file"],
+                ["new", "Upload file"],
                 ["existing", "From My files"],
               ] as const
             ).map(([value, label]) => (
@@ -307,7 +272,7 @@ function FileUploadForm({
                 onClick={() => {
                   setSource(value);
                   setFile(null);
-                  if (value === "existing") setMyFiles(null); // read the list again
+                  if (value === "existing") reloadMyFiles(); // read the list again
                   reset();
                 }}
                 className={`rounded-full px-4 py-1.5 text-sm font-medium ${
@@ -346,10 +311,7 @@ function FileUploadForm({
                   <>
                     <UploadIcon width={22} height={22} className="text-muted" />
                     <span className="font-medium">Drop a CSV or Excel file, or click to choose</span>
-                    <span className="text-xs text-muted">
-                      It is saved in My files › File uploads, so you can fix it there if a check fails. Once sent, it moves
-                      to File uploads › Archive.
-                    </span>
+                    <span className="text-xs text-muted">Saved to My files › File uploads</span>
                   </>
                 )}
               </label>
@@ -388,9 +350,9 @@ function FileUploadForm({
           )}
         </fieldset>
 
-        {/* 2. where to */}
+        {/* destination */}
         <fieldset>
-          <legend className="mb-2 text-sm font-medium">2. Where to</legend>
+          <legend className="mb-2 text-sm font-medium">Destination</legend>
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="flex flex-col gap-1.5 text-sm font-medium">
               BigQuery dataset
@@ -438,42 +400,37 @@ function FileUploadForm({
                 {target.load_mode === "overwrite" ? "Overwrite" : "Append"}
               </span>{" "}
               <span className="text-muted">
-                {target.load_mode === "overwrite"
-                  ? "Set by the contract: the file replaces every row in the table."
-                  : "Set by the contract: the rows are added to the table."}
+                {target.load_mode === "overwrite" ? "replaces all rows" : "adds rows"}
               </span>
             </p>
           )}
         </fieldset>
 
-        {/* 3. the name Cloud Run expects */}
+        {/* the name Cloud Run expects */}
         {target && (
           <fieldset>
-            <legend className="mb-2 text-sm font-medium">3. File name</legend>
+            <legend className="mb-2 text-sm font-medium">File name</legend>
             <div className="rounded-xl border border-line p-4 text-sm">
               <p>
-                Cloud Run expects <span className="font-mono text-xs font-semibold">{target.expected_name}</span>
-                <span className="block text-xs text-muted">The date is the file&apos;s business date, in the name as YYYYMMDD.</span>
+                Expected name <span className="font-mono text-xs font-semibold">{target.expected_name}</span>
               </p>
               {file && (
                 <>
                   {wrongFormat ? (
                     <p className="mt-3 flex items-start gap-2 text-bad">
                       <CloseIcon width={16} height={16} className="mt-0.5 shrink-0" />
-                      This table takes {target.formats.map((f) => f.toUpperCase()).join(" or ")} files; {file.original_name} is{" "}
-                      {file.format.toUpperCase()}.
+                      Needs {target.formats.map((f) => f.toUpperCase()).join(" or ")}, not {file.format.toUpperCase()}
                     </p>
                   ) : matched ? (
                     <p className="mt-3 flex items-start gap-2 text-ok">
                       <CheckIcon width={16} height={16} className="mt-0.5 shrink-0" />
-                      {file.original_name} already has the right name.
+                      Name matches.
                     </p>
                   ) : (
                     <p className="mt-3 flex items-start gap-2">
                       <InfoIcon width={16} height={16} className="mt-0.5 shrink-0 text-warn" />
                       <span>
-                        <span className="font-medium">{file.original_name}</span> doesn&apos;t match, so it lands as{" "}
-                        <span className="font-mono text-xs font-semibold">{name}</span>. Your copy keeps its name.
+                        Will be sent as <span className="font-mono text-xs font-semibold">{name}</span>
                       </span>
                     </p>
                   )}
@@ -486,9 +443,6 @@ function FileUploadForm({
                       onChange={(e) => setFileDate(e.target.value)}
                       required
                     />
-                    <span className="text-xs font-normal text-muted">
-                      {dateInName(file.original_name) ? "Taken from the file name. Change it if that's wrong." : "Defaults to today."}
-                    </span>
                   </label>
                 </>
               )}
@@ -498,14 +452,13 @@ function FileUploadForm({
 
         {target && (
           <label className="flex flex-col gap-1.5 text-sm font-medium">
-            Why is this data being loaded?
+            Reason
             <textarea
               value={justification}
               onChange={(e) => setJustification(e.target.value)}
-              placeholder="Daily customer refresh from the CRM export"
-              className={`${inputClass} h-20 py-2 font-normal`}
+              placeholder="e.g. daily CRM refresh"
+              className={`${inputClass} h-16 py-2 font-normal`}
             />
-            <span className="text-xs font-normal text-muted">The approving admin sees this.</span>
           </label>
         )}
 
@@ -527,12 +480,12 @@ function FileUploadForm({
           <ContractSummary contract={target.contract} columns={target.columns} version={target.contract_version} ordered />
         )}
         <div className="rounded-xl border border-line bg-surface p-4 text-sm">
-          <h3 className="font-semibold">What happens</h3>
-          <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-muted">
-            <li>DataDesk checks the name, the columns (all of them, in contract order) and every contract rule.</li>
-            <li>If it passes, an admin gets a request. Nothing is sent yet.</li>
-            <li>On approval it is checked again and put in the landing bucket under the expected name.</li>
-            <li>Cloud Run picks it up, checks it again and loads it. Follow every step on the request.</li>
+          <h3 className="font-semibold">How it works</h3>
+          <ol className="mt-2 list-decimal space-y-1 pl-5 text-muted">
+            <li>Checked against the contract</li>
+            <li>Approved by an admin</li>
+            <li>Loaded by Cloud Run</li>
+            <li>Tracked on the request</li>
           </ol>
         </div>
       </aside>
@@ -553,114 +506,6 @@ function FileUploadForm({
               </Link>
             </p>
           )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ------------------------------------------------------------------ the file picker
-type FileGroup = { label: string; files: WsFile[] };
-
-/** Choose a file from My files: grouped by folder (clear headings, unlike a native select's
- * grey ones), with a search box for long lists. */
-function FilePicker({
-  groups,
-  loading,
-  value,
-  onChange,
-}: {
-  groups: FileGroup[];
-  loading: boolean;
-  value: WsFile | null;
-  onChange: (f: WsFile) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const box = useRef<HTMLDivElement>(null);
-
-  // close on a click outside, or Escape
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => box.current && !box.current.contains(e.target as Node) && setOpen(false);
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  const q = query.trim().toLowerCase();
-  const shown = groups
-    .map((g) => ({ ...g, files: g.files.filter((f) => !q || f.original_name.toLowerCase().includes(q)) }))
-    .filter((g) => g.files.length > 0);
-
-  return (
-    <div ref={box} className="relative">
-      <button
-        type="button"
-        disabled={loading}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-        className={`${inputClass} flex items-center justify-between gap-2 text-left text-sm disabled:opacity-60`}
-      >
-        <span className={`truncate ${value ? "" : "text-muted"}`}>
-          {loading ? "Loading your files…" : value ? value.original_name : "Choose a file…"}
-        </span>
-        <ChevronDownIcon width={16} height={16} className="shrink-0 text-muted" />
-      </button>
-      {open && (
-        <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-xl border border-line bg-bg shadow-xl">
-          <div className="flex items-center gap-2 border-b border-line px-3">
-            <SearchIcon width={15} height={15} className="text-muted" />
-            <input
-              autoFocus
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search your files"
-              aria-label="Search your files"
-              className="h-10 w-full bg-transparent text-sm outline-none"
-            />
-          </div>
-          <div role="listbox" aria-label="Your files" className="max-h-80 overflow-auto py-1">
-            {shown.length === 0 && <p className="px-3 py-3 text-sm text-muted">No files match.</p>}
-            {shown.map((g) => (
-              <div key={g.label} role="group" aria-label={g.label}>
-                <p className="sticky top-0 flex items-center gap-2 bg-surface px-3 py-1.5 text-xs font-semibold text-fg">
-                  <FolderIcon width={14} height={14} className="text-brand" />
-                  {g.label}
-                </p>
-                {g.files.map((f) => {
-                  const selected = value?.id === f.id;
-                  return (
-                    <button
-                      key={f.id}
-                      type="button"
-                      role="option"
-                      aria-selected={selected}
-                      onClick={() => {
-                        onChange(f);
-                        setOpen(false);
-                        setQuery("");
-                      }}
-                      className={`flex w-full items-center gap-2 px-3 py-2 pl-8 text-left text-sm hover:bg-surface ${
-                        selected ? "bg-brand/10 font-medium text-brand" : ""
-                      }`}
-                    >
-                      <span className="min-w-0 flex-1 truncate">{f.original_name}</span>
-                      <span className="shrink-0 text-xs text-muted">
-                        v{f.current_version} · {f.row_count?.toLocaleString() ?? "?"} rows
-                      </span>
-                      {selected && <CheckIcon width={14} height={14} className="shrink-0" />}
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
-          </div>
         </div>
       )}
     </div>

@@ -10,8 +10,7 @@ export default async function FileUpload() {
       <div className="py-4">
         <h1 className="text-2xl">File upload</h1>
         <p className="mt-1 text-sm text-muted">
-          Send a CSV or Excel file to a BigQuery table through Cloud Run: checked here first, approved by an admin, then
-          loaded by the file processor, with every step shown on the request.
+          Load a CSV or Excel file into BigQuery.
         </p>
       </div>
       <FileUploadPage isAdmin={user.role === "admin"} />

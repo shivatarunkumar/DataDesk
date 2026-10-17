@@ -310,3 +310,10 @@ export const BqTableIcon = (p: IconProps) => (
     <rect x="3.5" y="4.5" width="17" height="4.5" rx="1.5" fill="currentColor" stroke="none" opacity="0.25" />
   </Icon>
 );
+
+/** Converting one format to another: two arrows passing each other. */
+export const ConvertIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M4 8h13l-3.5-3.5M20 16H7l3.5 3.5" />
+  </Icon>
+);

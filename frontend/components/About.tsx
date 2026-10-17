@@ -91,6 +91,10 @@ export function About() {
                 Upload CSV, TSV, Excel and JSON files (up to 50 MB and 100,000 rows), organise them in folders, and edit them in
                 a spreadsheet grid. Every save is a new version you can view, download or restore.
               </Card>
+              <Card title="Convertor" href="/convertor">
+                Turn an Excel workbook into CSV files: one per sheet you tick, named after the sheet (or as you like), with
+                the delimiter you choose, saved in any folder of My files.
+              </Card>
               <Card title="Load to table" href="/">
                 From any file&apos;s page: the same form and process as File upload, for that file. Pick the table, see its
                 contract and the name Cloud Run expects; problems are listed row by row before anything reaches an admin.

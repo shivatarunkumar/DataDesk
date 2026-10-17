@@ -7,6 +7,7 @@ import { PENDING_CHANGED } from "@/lib/pending";
 import type { PendingCounts, SessionUser } from "@/lib/types";
 import { ApiStatus } from "./ApiStatus";
 import {
+  ConvertIcon,
   DatabaseIcon,
   FilesIcon,
   InfoIcon,
@@ -26,6 +27,7 @@ const MAIN: NavItem[] = [
   { href: "/studio", label: "Data Studio", icon: StudioIcon },
   { href: "/uploads", label: "Load requests", icon: QueueIcon },
   { href: "/onboarding", label: "Onboarding", icon: DatabaseIcon },
+  { href: "/convertor", label: "Convertor", icon: ConvertIcon },
   { href: "/people", label: "People", icon: PeopleIcon },
 ];
 

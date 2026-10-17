@@ -4,6 +4,7 @@ from app.api.v1 import (
     account,
     admin,
     auth,
+    convertor,
     file_uploads,
     health,
     onboarding,
@@ -24,3 +25,4 @@ api_router.include_router(people.router)
 api_router.include_router(onboarding.router)
 api_router.include_router(studio.router)
 api_router.include_router(file_uploads.router)
+api_router.include_router(convertor.router)
