@@ -3,10 +3,11 @@
 Everyone can browse what is onboarded and ask for a new table; an admin approves the
 request. Admins' own onboardings are approved at once.
 
-    GET  /onboarding/sources/{type}/databases                      BigQuery datasets / Postgres databases
-    GET  /onboarding/sources/{type}/databases/{db}/tables          tables, marked when onboarded
-    GET  /onboarding/sources/{type}/databases/{db}/tables/{t}/columns?schema=   the live schema
-    POST /onboarding/sources/{type}/access-check                   can DataDesk read/write it?
+    GET  /onboarding/sources/datasets                                BigQuery datasets
+    GET  /onboarding/sources/datasets/{ds}/tables                    tables, marked when onboarded
+    GET  /onboarding/sources/datasets/{ds}/tables/{t}/columns        the live schema
+    GET  /onboarding/sources/datasets/{ds}/tables/{t}/cloud-run-contract   Cloud Run's rules today
+    POST /onboarding/sources/access-check                            can DataDesk read/write it?
     GET  /onboarding/targets                 approved tables (+ your requests; admins see all)
     POST /onboarding/targets                 onboard (admin) or ask to onboard (anyone else)
     GET  /onboarding/targets/{id}
@@ -18,9 +19,8 @@ request. Admins' own onboardings are approved at once.
 from __future__ import annotations
 
 import uuid
-from typing import Literal
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_admin, current_user
@@ -30,6 +30,7 @@ from app.models.user import User
 from app.schemas.onboarding import (
     AccessCheckIn,
     AccessReport,
+    CloudRunContract,
     SourceColumn,
     SourceTable,
     TargetIn,
@@ -37,11 +38,9 @@ from app.schemas.onboarding import (
     TargetPatch,
     TargetReviewIn,
 )
-from app.services import onboarding
+from app.services import file_upload, onboarding
 
 router = APIRouter(prefix="/onboarding", tags=["onboarding"])
-
-SourceType = Literal["bigquery", "postgres", "oracle"]
 
 
 def target_out(
@@ -67,47 +66,45 @@ async def _full_out(session: AsyncSession, target: UploadTarget, viewer: User) -
 
 
 # ------------------------------------------------------------------ discovering sources
-@router.get("/sources/{target_type}/databases", response_model=list[str])
-async def source_databases(target_type: SourceType, _: User = Depends(current_user)):
-    return await onboarding.list_databases(target_type)
+@router.get("/sources/datasets", response_model=list[str])
+async def source_datasets(_: User = Depends(current_user)):
+    return await onboarding.list_datasets()
 
 
-@router.get("/sources/{target_type}/databases/{database}/tables", response_model=list[SourceTable])
+@router.get("/sources/datasets/{dataset}/tables", response_model=list[SourceTable])
 async def source_tables(
-    target_type: SourceType,
-    database: str,
-    _: User = Depends(current_user),
-    session: AsyncSession = Depends(get_session),
+    dataset: str, _: User = Depends(current_user), session: AsyncSession = Depends(get_session)
 ):
-    return await onboarding.list_tables(session, target_type, database)
+    return await onboarding.list_tables(session, dataset)
 
 
-@router.get(
-    "/sources/{target_type}/databases/{database}/tables/{table}/columns", response_model=list[SourceColumn]
-)
-async def source_columns(
-    target_type: SourceType,
-    database: str,
-    table: str,
-    schema: str | None = Query(default=None),
-    _: User = Depends(current_user),
-):
-    return await onboarding.table_schema(target_type, database, schema, table)
+@router.get("/sources/datasets/{dataset}/tables/{table}/columns", response_model=list[SourceColumn])
+async def source_columns(dataset: str, table: str, _: User = Depends(current_user)):
+    return await onboarding.table_schema(dataset, table)
 
 
-@router.post("/sources/{target_type}/access-check", response_model=AccessReport)
-async def access_check(target_type: SourceType, body: AccessCheckIn, user: User = Depends(current_user)):
+@router.post("/sources/access-check", response_model=AccessReport)
+async def access_check(body: AccessCheckIn, user: User = Depends(current_user)):
     """Test DataDesk's own access to a table for the chosen write modes. The one check
     that writes (BigQuery's staging table) runs only for admins."""
     return await onboarding.check_access(
-        target_type,
         body.database_name,
-        body.schema_name,
         body.table_name,
         body.write_modes,
         body.key_columns,
         probe_writes=user.role == "admin",
+        file_upload=body.file_upload,
     )
+
+
+@router.get(
+    "/sources/datasets/{dataset}/tables/{table}/cloud-run-contract",
+    response_model=CloudRunContract | None,
+)
+async def cloud_run_contract(dataset: str, table: str, _: User = Depends(current_user)):
+    """The contract Cloud Run already has for this table (one DataDesk didn't publish), in
+    DataDesk's form, so onboarding starts from the rules that are live today. null if none."""
+    return await file_upload.existing_cloud_run_contract(dataset, table)
 
 
 # ------------------------------------------------------------------ onboarded tables

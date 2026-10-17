@@ -151,10 +151,6 @@ def check_schema(report: Report, conn: psycopg.Connection) -> None:
     required = (
         "users",
         "password_reset_requests",
-        "pg_databases",
-        "pg_tables_catalog",
-        "db_access_requests",
-        "db_access_grants",
         "bq_datasets_cache",
         "bq_tables_cache",
         "bq_access_requests",
@@ -184,13 +180,9 @@ def check_schema(report: Report, conn: psycopg.Connection) -> None:
 
     # Tables users can load into. Without any, the "Load to table" form has nothing to offer.
     onboarded = scalar(conn, "SELECT count(*) FROM upload_targets WHERE is_active") or 0
-    pg_targets = scalar(conn, "SELECT count(*) FROM pg_tables_catalog WHERE is_active") or 0
     bq_targets = scalar(conn, "SELECT count(*) FROM bq_tables_cache") or 0
-    if onboarded or pg_targets or bq_targets:
-        report.ok(
-            "targets",
-            f"{onboarded} onboarded, {pg_targets} Postgres grants catalog, {bq_targets} BigQuery cache",
-        )
+    if onboarded or bq_targets:
+        report.ok("targets", f"{onboarded} onboarded BigQuery tables, {bq_targets} in the BigQuery cache")
     else:
         report.warn(
             "targets",

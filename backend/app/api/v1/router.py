@@ -1,6 +1,17 @@
 from fastapi import APIRouter
 
-from app.api.v1 import account, admin, auth, health, onboarding, people, requests, studio, workspace
+from app.api.v1 import (
+    account,
+    admin,
+    auth,
+    file_uploads,
+    health,
+    onboarding,
+    people,
+    requests,
+    studio,
+    workspace,
+)
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(health.router)
@@ -12,3 +23,4 @@ api_router.include_router(account.router)
 api_router.include_router(people.router)
 api_router.include_router(onboarding.router)
 api_router.include_router(studio.router)
+api_router.include_router(file_uploads.router)

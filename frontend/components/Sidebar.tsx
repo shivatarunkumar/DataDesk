@@ -9,23 +9,23 @@ import { ApiStatus } from "./ApiStatus";
 import {
   DatabaseIcon,
   FilesIcon,
-  HistoryIcon,
   InfoIcon,
   PanelLeftIcon,
   PeopleIcon,
   QueueIcon,
   ShieldIcon,
   StudioIcon,
+  UploadIcon,
 } from "./icons";
 
 type NavItem = { href: string; label: string; icon: ComponentType<SVGProps<SVGSVGElement>> };
 
 const MAIN: NavItem[] = [
   { href: "/", label: "My files", icon: FilesIcon },
+  { href: "/file-upload", label: "File upload", icon: UploadIcon },
   { href: "/studio", label: "Data Studio", icon: StudioIcon },
   { href: "/uploads", label: "Load requests", icon: QueueIcon },
   { href: "/onboarding", label: "Onboarding", icon: DatabaseIcon },
-  { href: "/history", label: "Load history", icon: HistoryIcon },
   { href: "/people", label: "People", icon: PeopleIcon },
 ];
 

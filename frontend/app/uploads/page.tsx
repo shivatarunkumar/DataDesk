@@ -5,7 +5,7 @@ import { requireUser } from "@/lib/guard";
 export const metadata = { title: "Load requests · DataDesk" };
 
 export default async function UploadsPage() {
-  await requireUser("/uploads");
+  const user = await requireUser("/uploads");
   return (
     <div className="mx-auto max-w-5xl px-4 pb-10 lg:px-6">
       <div className="py-4">
@@ -15,7 +15,7 @@ export default async function UploadsPage() {
         </p>
       </div>
       <Suspense>
-        <RequestsBrowser />
+        <RequestsBrowser isAdmin={user.role === "admin"} />
       </Suspense>
     </div>
   );

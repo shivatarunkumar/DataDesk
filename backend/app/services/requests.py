@@ -40,6 +40,7 @@ async def find_requests(
     statuses: tuple[str, ...] | None = None,
     target_id: uuid.UUID | None = None,
     target: tuple[str, str | None, str] | None = None,
+    origin: str | None = None,
     oldest_first: bool = False,
     limit: int = 500,
 ) -> list[RequestRow]:
@@ -61,6 +62,8 @@ async def find_requests(
         query = query.where(UploadRequest.status.in_(statuses))
     if target_id:
         query = query.where(UploadRequest.target_id == target_id)
+    if origin:
+        query = query.where(UploadRequest.origin == origin)
     if target:
         target_type, database, table = target
         query = query.where(

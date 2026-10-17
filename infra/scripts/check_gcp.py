@@ -277,6 +277,63 @@ def check_bigquery(report: Report, project: str) -> None:
         report.warn("datasets", f"no datasets visible in {bq_project}", "BigQuery targets need at least one")
 
 
+def check_file_upload(report: Report, project: str) -> None:
+    """The Cloud Run file processor's buckets and audit tables, when File upload is on."""
+    landing = os.environ.get("FILE_UPLOAD_LANDING_BUCKET", "").strip()
+    config = os.environ.get("FILE_UPLOAD_CONFIG_BUCKET", "").strip()
+    if not landing and not config:
+        report.warn("file upload", "off (FILE_UPLOAD_LANDING_BUCKET / FILE_UPLOAD_CONFIG_BUCKET empty)")
+        return
+    if not (landing and config):
+        report.fail("file upload", "set both FILE_UPLOAD_LANDING_BUCKET and FILE_UPLOAD_CONFIG_BUCKET")
+        return
+
+    from google.api_core import exceptions
+    from google.cloud import bigquery, storage
+
+    client = storage.Client(project=project, credentials=APP_CREDENTIALS)
+    wanted = [
+        "storage.objects.create",
+        "storage.objects.delete",
+        "storage.objects.get",
+        "storage.objects.list",
+    ]
+    for name, bucket in (("landing", landing), ("config", config)):
+        try:
+            granted = set(client.bucket(bucket).test_iam_permissions(wanted, timeout=API_TIMEOUT))
+        except exceptions.NotFound:
+            report.fail(name, f"gs://{bucket} does not exist", "run make check-resources in cloud-run-poc")
+            continue
+        except Exception as exc:
+            report.fail(name, describe(exc), f"the account needs roles/storage.objectAdmin on gs://{bucket}")
+            continue
+        missing = [p for p in wanted if p not in granted]
+        if missing:
+            report.fail(
+                name, f"gs://{bucket}: missing {', '.join(missing)}", "grant roles/storage.objectAdmin"
+            )
+        else:
+            report.ok(name, f"gs://{bucket}: can write and remove files")
+
+    bq_project = os.environ.get("BQ_PROJECT_ID") or project
+    dataset = os.environ.get("FILE_UPLOAD_AUDIT_DATASET", "file_audit")
+    bq = bigquery.Client(project=bq_project, credentials=APP_CREDENTIALS)
+    for table in ("job_metadata", "validation_metadata"):
+        ref = f"{bq_project}.{dataset}.{table}"
+        try:
+            perms = bq.test_iam_permissions(ref, ["bigquery.tables.getData"]).get("permissions", [])
+        except exceptions.NotFound:
+            report.fail(table, f"{ref} not found", "check FILE_UPLOAD_AUDIT_DATASET")
+            continue
+        except Exception as exc:
+            report.fail(table, describe(exc))
+            continue
+        if perms:
+            report.ok(table, f"can read {ref}")
+        else:
+            report.fail(table, f"can't read {ref}", f"grant roles/bigquery.dataViewer on {dataset}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--no-write", action="store_true", help="skip the upload/delete probe")
@@ -296,6 +353,7 @@ def main() -> int:
 
     check_bucket(report, project, bucket, emulator, write=not args.no_write)
     check_bigquery(report, project)
+    check_file_upload(report, project)
     return report.finish()
 
 

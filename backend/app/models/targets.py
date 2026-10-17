@@ -1,4 +1,4 @@
-"""Upload targets, and who may load into them (see V003__upload_targets.sql)."""
+"""BigQuery upload targets, and who may load into them (V003, V006, V014)."""
 
 import uuid
 from datetime import datetime
@@ -8,54 +8,6 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, CreatedAt, UUIDPrimaryKey
-
-
-# ------------------------------------------------------------------ Postgres
-class PgDatabase(UUIDPrimaryKey, CreatedAt, Base):
-    __tablename__ = "pg_databases"
-
-    name: Mapped[str]
-    description: Mapped[str | None]
-    is_active: Mapped[bool] = mapped_column(default=True)
-
-
-class PgTableCatalog(UUIDPrimaryKey, CreatedAt, Base):
-    __tablename__ = "pg_tables_catalog"
-
-    database_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pg_databases.id", ondelete="CASCADE"))
-    table_name: Mapped[str]
-    description: Mapped[str | None]
-    is_active: Mapped[bool] = mapped_column(default=True)
-
-
-class DbAccessRequest(UUIDPrimaryKey, CreatedAt, Base):
-    __tablename__ = "db_access_requests"
-
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
-    scope_type: Mapped[str]  # database | table
-    database_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("pg_databases.id"))
-    table_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("pg_tables_catalog.id"))
-    justification: Mapped[str | None]
-    duration_hours: Mapped[int | None]  # None = permanent
-    status: Mapped[str] = mapped_column(default="pending")
-    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
-    reviewed_at: Mapped[datetime | None]
-    review_note: Mapped[str | None]
-
-
-class DbAccessGrant(UUIDPrimaryKey, Base):
-    __tablename__ = "db_access_grants"
-
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
-    scope_type: Mapped[str]  # database | table
-    database_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("pg_databases.id"))
-    table_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("pg_tables_catalog.id"))
-    source_request_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("db_access_requests.id"))
-    granted_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
-    granted_at: Mapped[datetime] = mapped_column(server_default=func.now())
-    expires_at: Mapped[datetime | None]
-    revoked_at: Mapped[datetime | None]
-    revoked_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
 
 
 # ------------------------------------------------------------------ BigQuery
@@ -103,9 +55,8 @@ class UploadTarget(UUIDPrimaryKey, CreatedAt, Base):
 
     __tablename__ = "upload_targets"
 
-    target_type: Mapped[str]  # bigquery | postgres | oracle
-    database_name: Mapped[str]  # BigQuery dataset / Postgres database
-    schema_name: Mapped[str | None]
+    target_type: Mapped[str] = mapped_column(default="bigquery")  # always bigquery (V014)
+    database_name: Mapped[str]  # the BigQuery dataset
     table_name: Mapped[str]
     display_name: Mapped[str]
     description: Mapped[str | None]
@@ -124,6 +75,8 @@ class UploadTarget(UUIDPrimaryKey, CreatedAt, Base):
     reviewed_at: Mapped[datetime | None]
     review_note: Mapped[str | None]
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # where the contract was last published for Cloud Run: {uri, version, published_at} (V013)
+    contract_published: Mapped[dict | None] = mapped_column(JSONB)
 
     @property
     def is_open(self) -> bool:
@@ -132,5 +85,4 @@ class UploadTarget(UUIDPrimaryKey, CreatedAt, Base):
 
     @property
     def location(self) -> str:
-        parts = [self.database_name, self.schema_name, self.table_name]
-        return ".".join(p for p in parts if p)
+        return f"{self.database_name}.{self.table_name}"

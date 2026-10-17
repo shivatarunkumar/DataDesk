@@ -70,6 +70,10 @@ class GcsStorage:
             raise StorageNotConfigured(
                 "File storage is not configured: set GCS_BUCKET in .env and restart the API"
             )
+        return self.client().bucket(self.bucket_name)
+
+    def client(self) -> storage.Client:
+        """The one GCS client, also used for the File upload buckets (adapters/file_pipeline.py)."""
         if self._client is None:
             if self._settings.gcs_endpoint_url:
                 from google.auth.credentials import AnonymousCredentials
@@ -83,7 +87,7 @@ class GcsStorage:
                 self._client = storage.Client(
                     project=self._settings.gcp_project_id or None, credentials=gcp.credentials()
                 )
-        return self._client.bucket(self.bucket_name)
+        return self._client
 
     # ---------------------------------------------------------------- operations
     def bucket_exists(self) -> bool:
@@ -116,6 +120,24 @@ class GcsStorage:
             int((time.perf_counter() - started) * 1000),
         )
         return data
+
+    def copy_out(self, source: str, bucket: str, destination: str, content_type: str) -> str:
+        """Copy a workspace object into another bucket; returns the new object's generation."""
+        started = time.perf_counter()
+        src = self._bucket().blob(source)
+        dest = self.client().bucket(bucket).blob(destination)
+        dest.content_type = content_type
+        token, _, _ = dest.rewrite(src)
+        while token is not None:  # big objects are copied in several calls
+            token, _, _ = dest.rewrite(src, token=token)
+        log.debug(
+            "  gcs copy %s → gs://%s/%s in %dms",
+            source,
+            bucket,
+            destination,
+            int((time.perf_counter() - started) * 1000),
+        )
+        return str(dest.generation)
 
     def copy(self, source: str, destination: str) -> None:
         """Copy an object inside the bucket; the bytes never leave Google's side."""

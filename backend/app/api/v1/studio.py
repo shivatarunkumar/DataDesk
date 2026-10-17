@@ -1,6 +1,6 @@
 """Data Studio: query onboarded tables, edit a few rows, submit them for approval.
 
-GET  /studio/tables    onboarded BigQuery and Postgres tables, open to everyone signed in
+GET  /studio/tables    onboarded BigQuery tables, open to everyone signed in
 POST /studio/query     run one read-only SELECT over onboarded tables of one source
 POST /studio/export    the result as a CSV in a folder of My files, for big edits
 POST /studio/submit    edited and new rows → contract checks → a load request (201),
@@ -38,7 +38,7 @@ async def run_query(
     settings: Settings = Depends(get_settings),
 ):
     limit = settings.studio_row_limit
-    result = await studio.run(session, settings, body.target_type, body.database, body.sql, limit)
+    result = await studio.run(session, settings, body.database, body.sql, limit)
     mode, reason, target = await studio.edit_mode(result)
     keys = list(target.key_columns or []) if target else []
     return QueryOut(
@@ -68,7 +68,7 @@ async def export(
     settings: Settings = Depends(get_settings),
 ):
     file, truncated = await studio.export(
-        session, settings, user, body.target_type, body.database, body.sql, body.name, body.folder_id
+        session, settings, user, body.database, body.sql, body.name, body.folder_id
     )
     await session.commit()
     await session.refresh(file)
@@ -90,9 +90,7 @@ async def submit(
         return UploadRequestOut(
             file_id=file.id,
             file_name=file.original_name,
-            target_type=target.target_type,
             target_database=target.database,
-            target_schema=target.schema_name,
             target_table=target.table,
             write_mode="upsert" if body.edits else "append",
             validation_status="failed",

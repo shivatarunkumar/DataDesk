@@ -3,7 +3,7 @@
 Optional extra rules for a target table, checked on top of its live schema when someone
 asks to load a file into it (`services/validators.py`). No file means schema checks only.
 
-One JSON file per table: `data-contracts/{postgres|bigquery}/{table}.json`
+One JSON file per table: `data-contracts/bigquery/{table}.json`
 
 ```json
 {

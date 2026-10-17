@@ -4,8 +4,8 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { api, errorText } from "@/lib/api";
-import { TARGET_LABELS, timeAgo } from "@/lib/format";
-import type { OnboardedTarget, TargetType } from "@/lib/types";
+import { timeAgo } from "@/lib/format";
+import type { OnboardedTarget } from "@/lib/types";
 import { ruleCount } from "./ContractSummary";
 import { onboardingState } from "./TargetEditor";
 import { DatabaseIcon, PlusIcon, SearchIcon, SpinnerIcon } from "./icons";
@@ -23,7 +23,8 @@ export function OnboardingList({ isAdmin }: { isAdmin: boolean }) {
   const [targets, setTargets] = useState<OnboardedTarget[] | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
-  const [source, setSource] = useState<"" | TargetType>("");
+  // filter by BigQuery dataset
+  const [source, setSource] = useState("");
   const [state, setState] = useState<"" | "active" | "paused" | "pending">("");
   const [query, setQuery] = useState("");
 
@@ -50,11 +51,12 @@ export function OnboardingList({ isAdmin }: { isAdmin: boolean }) {
   const q = query.trim().toLowerCase();
   const shown = (targets ?? []).filter(
     (t) =>
-      (!source || t.target_type === source) &&
+      (!source || t.database_name === source) &&
       (!state || onboardingState(t) === state) &&
       (!q || `${t.display_name} ${t.location} ${t.description ?? ""}`.toLowerCase().includes(q)),
   );
-  const countOf = (type: TargetType) => (targets ?? []).filter((t) => t.target_type === type).length;
+  const datasets = [...new Set((targets ?? []).map((t) => t.database_name))].sort();
+  const countOf = (dataset: string) => (targets ?? []).filter((t) => t.database_name === dataset).length;
   const filtered = Boolean(source || state || q);
 
   return (
@@ -93,7 +95,7 @@ export function OnboardingList({ isAdmin }: { isAdmin: boolean }) {
         )
       ) : targets.length === 0 ? (
         <EmptyState title="Nothing onboarded yet">
-          <p>Onboard a BigQuery or PostgreSQL table so people can send data to it.</p>
+          <p>Onboard a BigQuery table so people can send data to it.</p>
           <Link href="/onboarding/new" className={`${btn.primary} mt-5`}>
             <PlusIcon width={18} height={18} />
             {isAdmin ? "Onboard a table" : "Ask for a table"}
@@ -104,14 +106,14 @@ export function OnboardingList({ isAdmin }: { isAdmin: boolean }) {
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <select
             value={source}
-            onChange={(e) => setSource(e.target.value as "" | TargetType)}
-            aria-label="Filter by source"
+            onChange={(e) => setSource(e.target.value)}
+            aria-label="Filter by dataset"
             className="h-9 rounded-lg border border-line bg-bg px-2 text-sm outline-none focus:border-brand"
           >
-            <option value="">All sources ({targets.length})</option>
-            {(["bigquery", "postgres", "oracle"] as const).map((type) => (
-              <option key={type} value={type} disabled={countOf(type) === 0}>
-                {TARGET_LABELS[type]} ({countOf(type)})
+            <option value="">All datasets ({targets.length})</option>
+            {datasets.map((d) => (
+              <option key={d} value={d}>
+                {d} ({countOf(d)})
               </option>
             ))}
           </select>
@@ -177,7 +179,7 @@ export function OnboardingList({ isAdmin }: { isAdmin: boolean }) {
                       <span className="min-w-0">
                         <span className="block font-medium hover:underline">{t.display_name}</span>
                         <span className="block text-xs text-muted">
-                          {TARGET_LABELS[t.target_type]} · {t.location}
+                          BigQuery · {t.location}
                         </span>
                         {t.onboarding_status !== "approved" && (
                           <span className="block text-xs text-muted">

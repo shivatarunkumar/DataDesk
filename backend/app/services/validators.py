@@ -8,6 +8,7 @@ errors are capped so a badly-formatted file doesn't produce a giant payload.
 import json
 import re
 from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 
 # backend/data-contracts/{target_type}/{table}.json
@@ -17,7 +18,7 @@ MAX_ERRORS = 200
 
 
 # ── Type category mapping ─────────────────────────────────────────────────────
-# Collapse Postgres information_schema.data_type and BigQuery field_type into a
+# Collapse a BigQuery field_type (and the data types older code passes in) into a
 # small set of categories we know how to check a string value against.
 
 
@@ -94,12 +95,71 @@ def _is_date(v: str) -> bool:
     return parse_date(v) is not None
 
 
-def _coercible(value: str, category: str) -> bool:
+def _with_format(v: str, fmt: str | None, parse) -> bool:
+    """A column's own strptime format first, then the usual parsing."""
+    if fmt:
+        try:
+            datetime.strptime(v, fmt)
+            return True
+        except ValueError:
+            pass
+    return parse(v)
+
+
+def _strict_date(v: str) -> bool:
+    """What the Cloud Run file processor accepts for DATE: ISO 8601, or a datetime at midnight
+    (an Excel date cell, which its converter writes as a plain date)."""
+    try:
+        date.fromisoformat(v)
+        return True
+    except ValueError:
+        pass
+    try:
+        ts = datetime.fromisoformat(v)
+    except ValueError:
+        return False
+    return (ts.hour, ts.minute, ts.second, ts.microsecond) == (0, 0, 0, 0)
+
+
+def _strict_timestamp(v: str) -> bool:
+    try:
+        datetime.fromisoformat(v)
+        return True
+    except ValueError:
+        return False
+
+
+STRICT_BOOLEANS = ("true", "false", "t", "f", "yes", "no", "y", "n", "1", "0")
+
+
+def _coercible_strict(v: str, category: str, fmt: str | None) -> bool:
+    """Exactly what Cloud Run's coercion accepts (file-processor-service/app/coercion.py)."""
+    try:
+        if category == "integer":
+            int(v)
+        elif category == "number":
+            Decimal(v)
+            if not Decimal(v).is_finite():
+                return False
+        elif category == "boolean":
+            return v.lower() in STRICT_BOOLEANS
+        elif category == "date":
+            return _with_format(v, fmt, _strict_date)
+        elif category == "timestamp":
+            return _with_format(v, fmt, _strict_timestamp)
+        return True
+    except (ValueError, ArithmeticError):
+        return False
+
+
+def _coercible(value: str, category: str, fmt: str | None = None, strict: bool = False) -> bool:
     if value is None:
         return True
     v = str(value).strip()
     if v == "":
         return True
+    if strict:
+        return _coercible_strict(v, category, fmt)
     try:
         if category == "integer":
             int(v)
@@ -108,9 +168,9 @@ def _coercible(value: str, category: str) -> bool:
         elif category == "boolean":
             return v.lower() in ("true", "false", "0", "1", "yes", "no", "t", "f")
         elif category == "date":
-            return _is_date(v)
+            return _with_format(v, fmt, _is_date)
         elif category == "timestamp":
-            return _is_timestamp(v)
+            return _with_format(v, fmt, _is_timestamp)
         else:
             return True
         return True
@@ -118,7 +178,7 @@ def _coercible(value: str, category: str) -> bool:
         return False
 
 
-RULE_KEYS = ("required", "unique", "regex", "enum", "min", "max", "min_length", "max_length")
+RULE_KEYS = ("required", "unique", "regex", "enum", "min", "max", "min_length", "max_length", "format")
 
 
 def rules_from_contract(contract: dict | None) -> dict:
@@ -136,9 +196,9 @@ def _is_set(value) -> bool:
     return value is not None and value is not False and value != "" and value != []
 
 
-def load_rules(target_type: str, table: str) -> dict:
+def load_rules(table: str) -> dict:
     """Optional extra rules keyed by column name, or {} if no contract file exists."""
-    path = _CONTRACTS_DIR / target_type / f"{table}.json"
+    path = _CONTRACTS_DIR / "bigquery" / f"{table}.json"
     if not path.exists():
         return {}
     try:
@@ -182,19 +242,30 @@ def validate(
     key_columns: list[str] | None,
     rules: dict | None = None,
     max_rows: int | None = None,
+    min_rows: int | None = None,
+    strict: bool = False,
 ) -> dict:
     """
     parsed:        {columns, rows, ...} from file_parser.parse
     target_columns: [{name, type, nullable}] from live table introspection
-    Returns {passed: bool, errors: [{row, column, rule, message}], summary, stats}.
+    strict:        check values exactly as the Cloud Run file processor parses them
+    Returns {passed: bool, errors: [{row, column, rule, message}], warnings: [...], summary, stats}.
+
+    A contract column with severity "warning" reports its failures as warnings: they are
+    shown, but don't stop the file. The table's own NOT NULL is always an error.
     """
     rules = rules or {}
     key_columns = key_columns or []
     errors: list[dict] = []
+    warnings: list[dict] = []
 
-    def add(row, column, rule, message):
-        if len(errors) < MAX_ERRORS:
-            errors.append({"row": row, "column": column, "rule": rule, "message": message})
+    def add(row, column, rule, message, severity="error"):
+        bucket = warnings if severity == "warning" else errors
+        if len(bucket) < MAX_ERRORS:
+            bucket.append({"row": row, "column": column, "rule": rule, "message": message})
+
+    def severity_of(column) -> str:
+        return (rules.get(column) or {}).get("severity") or "error"
 
     file_cols = parsed["columns"]
     rows = parsed["rows"]
@@ -208,11 +279,24 @@ def validate(
         add(None, None, "file", "File has no data rows.")
     if max_rows and len(rows) > max_rows:
         add(None, None, "max_rows", f"File has {len(rows)} rows; this table's contract allows {max_rows}.")
+    if min_rows and rows and len(rows) < min_rows:
+        add(
+            None,
+            None,
+            "min_rows",
+            f"File has {len(rows)} rows; this table's contract needs at least {min_rows}.",
+        )
 
     # A contract column marked required must be present, not just filled in.
     for name, rule in rules.items():
         if rule.get("required") and name not in file_set:
-            add(None, name, "missing_column", f"Column '{name}' is required by the data contract.")
+            add(
+                None,
+                name,
+                "missing_column",
+                f"Column '{name}' is required by the data contract.",
+                severity_of(name),
+            )
 
     # ── Column presence ───────────────────────────────────────────────────────
     # Required = target column that is NOT nullable and has no default indicator.
@@ -265,17 +349,28 @@ def validate(
         for c in file_cols:
             tgt = target_by_name.get(c)
             val = r.get(c)
+            rule = rules.get(c)
+            level = severity_of(c)
             if tgt is not None:
                 cat = category(tgt["type"])
-                if not _coercible(val, cat):
-                    add(i, c, "type", f"value {val!r} is not a valid {cat} for column '{c}' ({tgt['type']}).")
+                fmt = (rule or {}).get("format")
+                if not _coercible(val, cat, fmt, strict):
+                    # Cloud Run loads a WARNING column's bad value as NULL; DataDesk's own
+                    # loaders can't, so outside strict mode a type error always blocks
+                    add(
+                        i,
+                        c,
+                        "type",
+                        f"value {val!r} is not a valid {cat} for column '{c}' ({tgt['type']}"
+                        f"{f', format {fmt}' if fmt else ''}).",
+                        level if strict else "error",
+                    )
                 if (val is None or str(val).strip() == "") and not tgt.get("nullable", True):
                     add(i, c, "not_null", f"column '{c}' is NOT NULL but value is empty.")
-            rule = rules.get(c)
             if rule:
                 msg = _check_rule(val, rule)
                 if msg:
-                    add(i, c, "rule", f"column '{c}' {msg}.")
+                    add(i, c, "rule", f"column '{c}' {msg}.", level)
             if c in unique_seen and val is not None and str(val).strip() != "":
                 first = unique_seen[c].setdefault(str(val), i)
                 if first != i:
@@ -284,6 +379,7 @@ def validate(
                         c,
                         "unique",
                         f"column '{c}' value {val!r} repeats row {first + 1} (must be unique).",
+                        level,
                     )
         if len(errors) >= MAX_ERRORS:
             break
@@ -292,9 +388,12 @@ def validate(
     summary = "All checks passed." if passed else f"{len(errors)} problem(s) found."
     if len(errors) >= MAX_ERRORS:
         summary += f" (showing first {MAX_ERRORS})"
+    if warnings:
+        summary += f" {len(warnings)} warning(s): shown, but they don't stop the file."
     return {
         "passed": passed,
         "errors": errors,
+        "warnings": warnings,
         "summary": summary,
         "stats": {
             "file_rows": len(rows),

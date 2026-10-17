@@ -1,9 +1,6 @@
-import { LoadHistory } from "@/components/AdminPanel";
-import { requireUser } from "@/lib/guard";
+import { redirect } from "next/navigation";
 
-export const metadata = { title: "Load history · DataDesk" };
-
-export default async function HistoryPage() {
-  await requireUser("/history");
-  return <LoadHistory />;
+// Load history was merged into Load requests: Everyone, filtered to decided requests.
+export default function HistoryPage() {
+  redirect("/uploads?scope=all&status=reviewed");
 }

@@ -9,8 +9,7 @@ from app.schemas.workspace import FileOut
 
 
 class QueryIn(BaseModel):
-    target_type: Literal["bigquery", "postgres"]
-    # the Postgres database to connect to; for BigQuery, the dataset unqualified names resolve in
+    # the BigQuery dataset unqualified table names resolve in
     database: str | None = None
     sql: str = Field(min_length=1, max_length=20_000)
 

@@ -7,8 +7,7 @@ whole request fails with nothing written, rather than overwriting someone else's
 Rows that are identical in every queried column can't be told apart, so an edit to one
 changes each of them; the request records how many rows each edit matched.
 
-Values travel as text and are cast to each column's type in SQL, the same way on
-Postgres (:name) and BigQuery (@name).
+Values travel as text query parameters (@name) and are cast to each column's type in SQL.
 """
 
 from __future__ import annotations
@@ -19,10 +18,7 @@ import re
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import text
-
 from app.adapters import bigquery
-from app.adapters.target_postgres import target_session
 from app.services import loaders
 from app.services.errors import ServiceError
 from app.services.validators import category
@@ -31,13 +27,9 @@ from app.services.validators import category
 FIND_LIMIT = 5000
 
 # types a WHERE can't compare with "=": nested, JSON, binary, spatial and array columns
-_UNCOMPARABLE = re.compile(
-    r"record|struct|json|xml|geography|geometry|bytes|bytea|array|point|line|polygon|box|circle|path|"
-    r"tsvector|\[\]",
-    re.IGNORECASE,
-)
+_UNCOMPARABLE = re.compile(r"record|struct|json|geography|bytes|array", re.IGNORECASE)
 # values a cell can't hold as plain text: nested records and arrays
-_NESTED = re.compile(r"^(record|struct|array)\b|\[\]$", re.IGNORECASE)
+_NESTED = re.compile(r"^(record|struct|array)\b", re.IGNORECASE)
 _BQ_CAST = {"INTEGER": "INT64", "FLOAT": "FLOAT64", "BOOLEAN": "BOOL"}
 
 
@@ -86,28 +78,21 @@ def nested(db_type: str) -> bool:
 
 # ------------------------------------------------------------------ sql
 class _Sql:
-    """Quoting, parameters and casts for one target."""
+    """Quoting, parameters and casts for one BigQuery table."""
 
-    def __init__(self, target_type: str, database: str, schema: str | None, table: str) -> None:
-        self.bq = target_type == "bigquery"
-        if self.bq:
-            self.ref = bigquery.ref(loaders.ident(database), loaders.ident(table))
-        else:
-            self.ref = f'"{loaders.ident(schema or "public")}"."{loaders.ident(table)}"'
+    def __init__(self, dataset: str, table: str) -> None:
+        self.ref = bigquery.ref(loaders.ident(dataset), loaders.ident(table))
         self.params: dict[str, str | None] = {}
 
     def col(self, name: str) -> str:
-        return f"`{loaders.ident(name)}`" if self.bq else f'"{loaders.ident(name)}"'
+        return f"`{loaders.ident(name)}`"
 
     def value(self, name: str, value: str | None, db_type: str) -> str:
         """A parameter cast to the column's type, or NULL."""
         if value is None:
             return "NULL"
         self.params[name] = value
-        if self.bq:
-            return f"CAST(@{name} AS {_BQ_CAST.get(db_type.upper(), db_type.upper())})"
-        # asyncpg types a parameter from its cast; sent as text, it is cast from text
-        return f"CAST(CAST(:{name} AS text) AS {db_type})"
+        return f"CAST(@{name} AS {_BQ_CAST.get(db_type.upper(), db_type.upper())})"
 
     def where(self, match: dict[str, str | None], types: dict[str, str], prefix: str) -> str:
         parts = []
@@ -126,22 +111,16 @@ def usable_match(match: dict[str, str | None], types: dict[str, str]) -> dict[st
 
 # ------------------------------------------------------------------ finding rows
 async def find_rows(
-    target_type: str,
-    database: str,
-    schema: str | None,
+    dataset: str,
     table: str,
     matches: list[dict[str, str | None]],
     types: dict[str, str],
 ) -> list[list[dict]]:
     """For each match, the table's rows that have those values now (every column, as text)."""
-    sql = _Sql(target_type, database, schema, table)
+    sql = _Sql(dataset, table)
     conditions = " OR ".join(f"({sql.where(m, types, f'm{i}_')})" for i, m in enumerate(matches))
     statement = f"SELECT * FROM {sql.ref} WHERE {conditions} LIMIT {FIND_LIMIT}"
-    if sql.bq:
-        raw = await asyncio.to_thread(bigquery.query, statement, sql.params)
-    else:
-        async with target_session(database) as session:
-            raw = [dict(r._mapping) for r in await session.execute(text(statement), sql.params)]
+    raw = await asyncio.to_thread(bigquery.query, statement, sql.params)
 
     found: list[list[dict]] = [[] for _ in matches]
     for r in raw:
@@ -157,20 +136,13 @@ def _label(change: dict) -> str:
     return ", ".join(f"{k} {v}" for k, v in (change.get("label") or {}).items()) or "A row"
 
 
-async def apply(
-    target_type: str,
-    database: str,
-    schema: str | None,
-    table: str,
-    summary: dict,
-    types: dict[str, str],
-) -> dict:
+async def apply(dataset: str, table: str, summary: dict, types: dict[str, str]) -> dict:
     """Write a Studio request: every edit as an UPDATE on the row's original values, every
     new row as an INSERT, all in one transaction. If an edited row no longer matches, it
     all rolls back and the reason says which row."""
     changes = summary.get("changes") or []
     added = summary.get("added_rows") or []
-    sql = _Sql(target_type, database, schema, table)
+    sql = _Sql(dataset, table)
     updates: list[tuple[str, str]] = []
     for i, change in enumerate(changes):
         sets = ", ".join(
@@ -191,36 +163,23 @@ async def apply(
         "Run the query again and redo the edit."
     )
 
-    if sql.bq:
-        # one script, one transaction: an edit that matches nothing raises, which rolls it all back
-        lines = ["DECLARE updated INT64 DEFAULT 0;", "BEGIN TRANSACTION;"]
-        for i, (statement, label) in enumerate(updates):
-            sql.params[f"stale{i}"] = stale.format(label=label)
-            lines += [
-                f"{statement};",
-                f"IF @@row_count = 0 THEN RAISE USING MESSAGE = @stale{i}; END IF;",
-                "SET updated = updated + @@row_count;",
-            ]
-        lines += [f"{statement};" for statement in inserts]
-        lines += ["COMMIT TRANSACTION;", "SELECT updated;"]
-        try:
-            rows = await asyncio.to_thread(bigquery.query, "\n".join(lines), sql.params, 600)
-        except Exception as exc:
-            message = getattr(exc, "message", None) or str(exc)
-            # "GET https://bigquery…/queries/…: <reason> at [3:1]" → the reason
-            if message.startswith(("GET ", "POST ")) and ": " in message:
-                message = message.split(": ", 1)[1]
-            raise ServiceError(message.split(" at [")[0]) from exc
-        return {"updated": int(rows[0]["updated"]) if rows else 0, "inserted": len(inserts)}
-
-    updated = 0
-    async with target_session(database) as session:
-        for statement, label in updates:
-            result = await session.execute(text(statement), sql.params)
-            if result.rowcount == 0:
-                raise ServiceError(stale.format(label=label))  # the session closes without committing
-            updated += result.rowcount
-        for statement in inserts:
-            await session.execute(text(statement), sql.params)
-        await session.commit()
-    return {"updated": updated, "inserted": len(inserts)}
+    # one script, one transaction: an edit that matches nothing raises, which rolls it all back
+    lines = ["DECLARE updated INT64 DEFAULT 0;", "BEGIN TRANSACTION;"]
+    for i, (statement, label) in enumerate(updates):
+        sql.params[f"stale{i}"] = stale.format(label=label)
+        lines += [
+            f"{statement};",
+            f"IF @@row_count = 0 THEN RAISE USING MESSAGE = @stale{i}; END IF;",
+            "SET updated = updated + @@row_count;",
+        ]
+    lines += [f"{statement};" for statement in inserts]
+    lines += ["COMMIT TRANSACTION;", "SELECT updated;"]
+    try:
+        rows = await asyncio.to_thread(bigquery.query, "\n".join(lines), sql.params, 600)
+    except Exception as exc:
+        message = getattr(exc, "message", None) or str(exc)
+        # "GET https://bigquery…/queries/…: <reason> at [3:1]" → the reason
+        if message.startswith(("GET ", "POST ")) and ": " in message:
+            message = message.split(": ", 1)[1]
+        raise ServiceError(message.split(" at [")[0]) from exc
+    return {"updated": int(rows[0]["updated"]) if rows else 0, "inserted": len(inserts)}

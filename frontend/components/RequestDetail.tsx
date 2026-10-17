@@ -4,14 +4,16 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { api, errorText } from "@/lib/api";
-import { TARGET_LABELS, dateTime, describeResult } from "@/lib/format";
+import { dateTime, describeResult } from "@/lib/format";
 import { notifyPendingChanged } from "@/lib/pending";
 import type { UploadRequest } from "@/lib/types";
 import { RejectDialog } from "./AdminPanel";
 import { ArrowLeftIcon, CheckIcon, SpinnerIcon } from "./icons";
 import { StudioChanges } from "./DataStudio";
+import { DeleteRequestButton } from "./DeleteRequest";
+import { FileUploadDetail } from "./FileUploadDetail";
 import { LoadFlow, stagesFor, studioChanges } from "./LoadFlow";
-import { ValidationReportView } from "./LoadToTable";
+import { ValidationReportView } from "./ValidationReport";
 import { Alert, EmptyState, StatusPill, btn } from "./ui";
 
 /** One load request: what, who asked, who decided, and what happened. Admins decide here. */
@@ -31,7 +33,7 @@ export function RequestDetail({ requestId, isAdmin }: { requestId: string; isAdm
   useEffect(load, [load]);
 
   // while it is still moving, keep the flow current without a reload
-  const moving = r?.status === "pending" || r?.status === "approved";
+  const moving = r?.origin !== "pipeline" && (r?.status === "pending" || r?.status === "approved");
   useEffect(() => {
     if (!moving) return;
     const timer = setInterval(load, 5000);
@@ -64,9 +66,11 @@ export function RequestDetail({ requestId, isAdmin }: { requestId: string; isAdm
         {error ? <Alert>{error}</Alert> : <><SpinnerIcon /> Loading…</>}
       </div>
     );
+  // File upload: Cloud Run does the load, so the page follows it there
+  if (r.origin === "pipeline") return <FileUploadDetail initial={r} isAdmin={isAdmin} onChange={setR} />;
 
   const target = r.target_label ?? `${r.target_database}.${r.target_table}`;
-  const location = [r.target_database, r.target_schema, r.target_table].filter(Boolean).join(".");
+  const location = `${r.target_database}.${r.target_table}`;
   const outcome = describeResult(r.result);
   const report = r.validation_report;
   const pending = r.status === "pending";
@@ -83,10 +87,11 @@ export function RequestDetail({ requestId, isAdmin }: { requestId: string; isAdm
             {target}
           </h1>
           <p className="mt-1 text-sm text-muted">
-            {TARGET_LABELS[r.target_type] ?? r.target_type} · {location}
+            BigQuery · {location}
           </p>
         </div>
         <StatusPill status={r.status} />
+        {isAdmin && <DeleteRequestButton request={r} onDeleted={() => router.push("/uploads")} />}
       </div>
 
       {error && (
@@ -153,7 +158,7 @@ export function RequestDetail({ requestId, isAdmin }: { requestId: string; isAdm
         <Fact label="Target">
           <span className="font-medium">{target}</span>
           <span className="block text-xs text-muted">
-            {TARGET_LABELS[r.target_type] ?? r.target_type} · {location}
+            BigQuery · {location}
           </span>
         </Fact>
         <Fact label="Write mode">
@@ -249,7 +254,7 @@ export function RequestDetail({ requestId, isAdmin }: { requestId: string; isAdm
   );
 }
 
-function Fact({ label, wide, children }: { label: string; wide?: boolean; children: ReactNode }) {
+export function Fact({ label, wide, children }: { label: string; wide?: boolean; children: ReactNode }) {
   return (
     <div className={`border-b border-line px-4 py-3 last:border-b-0 sm:odd:border-r ${wide ? "sm:col-span-2 sm:!border-r-0" : ""}`}>
       <dt className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</dt>

@@ -54,24 +54,6 @@ def test_anything_else_is_refused(sql, message):
         studio.check_select(sql)
 
 
-def test_plan_relations_walk_the_whole_plan():
-    plan = [
-        {
-            "Plan": {
-                "Node Type": "Hash Join",
-                "Plans": [
-                    {"Node Type": "Seq Scan", "Relation Name": "orders", "Schema": "public"},
-                    {
-                        "Node Type": "Hash",
-                        "Plans": [{"Node Type": "Seq Scan", "Relation Name": "users", "Schema": "auth"}],
-                    },
-                ],
-            }
-        }
-    ]
-    assert studio._plan_relations(plan) == {("public", "orders"), ("auth", "users")}
-
-
 # ---------------------------------------------------------------- values
 @pytest.mark.parametrize(
     "value, shown",
@@ -108,9 +90,8 @@ COLUMNS = [
 
 def target(modes=("append", "upsert"), keys=("id",)) -> UploadTarget:
     return UploadTarget(
-        target_type="postgres",
+        target_type="bigquery",
         database_name="shop",
-        schema_name="public",
         table_name="items",
         display_name="Items",
         write_modes=list(modes),
@@ -183,14 +164,6 @@ def test_an_edit_without_changes_is_refused():
         )
 
 
-def test_datadesks_own_database_is_never_offered():
-    own = target()
-    own.database_name = "datadesk"
-    with patch.object(studio, "_own_database", return_value="datadesk"):
-        assert not studio._in_studio(own)
-        assert studio._in_studio(target())
-
-
 def test_export_names():
     assert studio.export_name("march fixes", "orders-export") == "march fixes.csv"
     assert studio.export_name("march.CSV", "x") == "march.CSV"
@@ -200,14 +173,14 @@ def test_export_names():
 
 
 def test_rows_are_found_by_comparable_columns_only():
-    types = {"id": "integer", "tags": "text[]", "doc": "jsonb", "name": "text", "RAW": "RECORD"}
-    match = {"id": "1", "tags": "{a}", "doc": "{}", "name": None, "RAW": "{}", "gone": "x"}
+    types = {"id": "INTEGER", "tags": "ARRAY<STRING>", "doc": "JSON", "name": "STRING", "RAW": "RECORD"}
+    match = {"id": "1", "tags": "[a]", "doc": "{}", "name": None, "RAW": "{}", "gone": "x"}
     assert studio_changes.usable_match(match, types) == {"id": "1", "name": None}
 
 
 def test_where_casts_each_value_to_its_column_type():
     with patch.object(studio_changes.bigquery, "ref", return_value="`p.ds.t`"):
-        sql = studio_changes._Sql("bigquery", "ds", None, "t")
+        sql = studio_changes._Sql("ds", "t")
     where = sql.where(
         {"n": "5", "d": "2026-05-01", "s": None}, {"n": "INTEGER", "d": "DATE", "s": "STRING"}, "w"
     )

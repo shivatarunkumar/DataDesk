@@ -33,10 +33,6 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://datadesk:datadesk@localhost:5432/datadesk"
     db_pool_size: int = 5
 
-    # --- upload targets ---
-    # the database name at the end is swapped for each Postgres target
-    target_database_url: str = "postgresql+asyncpg://datadesk:datadesk@localhost:5432/postgres"
-
     # --- auth ---
     jwt_secret: str = INSECURE_JWT_SECRET
     access_token_ttl_min: int = 720
@@ -46,7 +42,7 @@ class Settings(BaseSettings):
     gcp_region: str = "us-central1"
     # DataDesk's own service account; every GCP call impersonates it (adapters/gcp.py)
     gcp_service_account: str = ""
-    # true → a personal gcloud login or a Postgres superuser FAILS the access check (and so
+    # true → a personal gcloud login FAILS the access check (and so
     # blocks onboarding); false → it is shown as a warning only
     enforce_app_identity: bool = False
 
@@ -59,6 +55,26 @@ class Settings(BaseSettings):
     bq_enabled: bool = True
     bq_project_id: str = ""  # empty → gcp_project_id
     bq_location: str = ""  # empty → each job runs where its dataset lives
+
+    # --- file upload (the Cloud Run file processor: GCS landing → Cloud Run → BigQuery) ---
+    # empty → the File upload tab is off and no contracts are published
+    file_upload_landing_bucket: str = ""
+    # where Cloud Run reads data contracts from; DataDesk publishes one YAML per table there
+    file_upload_config_bucket: str = ""
+    file_upload_contracts_prefix: str = "contracts/"
+    # folder in the landing bucket: {prefix}/{request id}/{landing name}
+    file_upload_landing_prefix: str = "datadesk"
+    # BigQuery dataset (in bq_project) holding job_metadata and validation_metadata
+    file_upload_audit_dataset: str = "file_audit"
+    # how long Cloud Run caches contracts (its CONTRACT_CACHE_TTL_SECONDS): approving waits
+    # this long after a contract change, so the file isn't checked against the old one
+    file_upload_contract_ttl_seconds: int = 300
+    # no Cloud Run job this long after landing → the request says it wasn't picked up
+    file_upload_pickup_minutes: int = 5
+    # Pub/Sub delivery attempts before the message goes to the dead-letter topic
+    file_upload_max_attempts: int = 5
+    # how often the API reads Cloud Run's progress for requests still with it; 0 → only on view
+    file_upload_poll_seconds: int = 15
 
     # --- data studio ---
     studio_row_limit: int = 1000  # rows shown (and editable) per query
@@ -81,6 +97,10 @@ class Settings(BaseSettings):
     @property
     def storage_configured(self) -> bool:
         return self.gcs_bucket.strip() not in PLACEHOLDER_BUCKETS
+
+    @property
+    def file_upload_enabled(self) -> bool:
+        return bool(self.file_upload_landing_bucket.strip() and self.file_upload_config_bucket.strip())
 
     @property
     def bq_project(self) -> str:

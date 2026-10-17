@@ -2,7 +2,7 @@
 File bytes live in GCS; only metadata lives in these tables."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import BigInteger, ForeignKey, func
 from sqlalchemy.dialects.postgresql import JSONB
@@ -59,9 +59,8 @@ class UploadRequest(UUIDPrimaryKey, CreatedAt, Base):
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     file_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspace_files.id", ondelete="CASCADE"))
     file_version: Mapped[int]
-    target_type: Mapped[str]  # postgres | bigquery | oracle
-    target_database: Mapped[str | None]
-    target_schema: Mapped[str | None]
+    target_type: Mapped[str] = mapped_column(default="bigquery")  # always bigquery (V014)
+    target_database: Mapped[str | None]  # the BigQuery dataset
     target_table: Mapped[str]
     write_mode: Mapped[str]  # append | upsert
     key_columns: Mapped[list | None] = mapped_column(JSONB)
@@ -77,6 +76,15 @@ class UploadRequest(UUIDPrimaryKey, CreatedAt, Base):
     # the onboarded target, and the version of its data contract the file was checked against
     target_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("upload_targets.id", ondelete="SET NULL"))
     contract_version: Mapped[int | None]
-    # "file" (uploaded and edited in My files) or "studio" (edited in Data Studio)
+    # "file" (uploaded and edited in My files), "studio" (edited in Data Studio), or
+    # "pipeline" (sent to BigQuery through the Cloud Run file processor, V013)
     origin: Mapped[str] = mapped_column(default="file")
     change_summary: Mapped[dict | None] = mapped_column(JSONB)
+    # pipeline requests: the name the file lands under, where it landed, and what Cloud Run did
+    file_date: Mapped[date | None]
+    landing_name: Mapped[str | None]
+    landing_uri: Mapped[str | None]
+    landing_generation: Mapped[str | None]
+    landed_at: Mapped[datetime | None]
+    pipeline: Mapped[dict | None] = mapped_column(JSONB)
+    pipeline_checked_at: Mapped[datetime | None]

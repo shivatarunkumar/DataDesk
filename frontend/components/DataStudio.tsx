@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { format } from "sql-formatter";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api, errorText } from "@/lib/api";
 import { humanSize, timeAgo } from "@/lib/format";
@@ -8,11 +9,12 @@ import { notifyPendingChanged } from "@/lib/pending";
 import type { Folder, StudioResult, Target, UploadRequest, ValidationReport, WsFile } from "@/lib/types";
 import { ContractSummary } from "./ContractSummary";
 import { LoadFlow, flowSummary, stagesFor, stagesForSubmit, studioChanges } from "./LoadFlow";
-import { ValidationReportView } from "./LoadToTable";
+import { ValidationReportView } from "./ValidationReport";
 import {
   ChevronDownIcon,
   ChevronRightIcon,
-  DatabaseIcon,
+  BqTableIcon,
+  DatasetIcon,
   DownloadIcon,
   InfoIcon,
   KeyIcon,
@@ -33,11 +35,6 @@ import { Alert, Dialog, EmptyState, Field, btn, inputClass } from "./ui";
  * the result as a CSV, which is edited and loaded like any other.
  */
 
-type Source = "bigquery" | "postgres";
-const SOURCES: { value: Source; label: string }[] = [
-  { value: "bigquery", label: "BigQuery" },
-  { value: "postgres", label: "PostgreSQL" },
-];
 
 type Cell = string | null;
 /** an edited existing row: its column → new value */
@@ -50,14 +47,11 @@ const nested = (type: string | null) => /^(RECORD|STRUCT|ARRAY)\b|\[\]$/i.test(t
 const same = (a: Cell, b: Cell) => (a ?? "") === (b ?? "");
 
 function starterQuery(t: Target): string {
-  if (t.target_type === "bigquery") return `SELECT *\nFROM \`${t.database}.${t.table}\`\nLIMIT 100`;
-  const order = t.key_columns.length ? `\nORDER BY ${t.key_columns.join(", ")}` : "";
-  return `SELECT *\nFROM ${t.schema_name ?? "public"}.${t.table}${order}\nLIMIT 100`;
+  return `SELECT *\nFROM \`${t.database}.${t.table}\`\nLIMIT 100`;
 }
 
 export function DataStudio() {
   const [tables, setTables] = useState<Target[] | null>(null);
-  const [source, setSource] = useState<Source>("bigquery");
   const [database, setDatabase] = useState("");
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [sql, setSql] = useState("");
@@ -100,15 +94,24 @@ export function DataStudio() {
     api<Target[]>("/studio/tables")
       .then((rows) => {
         setTables(rows);
-        // start on a source that has tables
-        if (!rows.some((t) => t.target_type === "bigquery") && rows.some((t) => t.target_type === "postgres")) {
-          setSource("postgres");
+        // opened with ?target=<id>&sql=<query> (e.g. "Check the data" on a File upload): the query is
+        // written for them, and they run it when they want to
+        const params = new URLSearchParams(window.location.search);
+        const wanted = rows.find((t) => t.target_id && t.target_id === params.get("target"));
+        const preset = params.get("sql");
+        if (wanted && preset) {
+          setDatabase(wanted.database ?? "");
+          setPicked(wanted.target_id);
+          setSql(preset);
+          lastStarter.current = preset;
+          requestAnimationFrame(() => editorRef.current?.focus());
         }
       })
       .catch((e) => setQueryError(errorText(e)));
+    // once, on arrival
   }, []);
 
-  const bySource = useMemo(() => (tables ?? []).filter((t) => t.target_type === source), [tables, source]);
+  const bySource = useMemo(() => tables ?? [], [tables]);
   const databases = useMemo(() => [...new Set(bySource.map((t) => t.database ?? ""))].sort(), [bySource]);
   useEffect(() => {
     if (databases.length && !databases.includes(database)) setDatabase(databases[0]);
@@ -177,6 +180,18 @@ export function DataStudio() {
     });
   }
 
+  /** Lay the query out the way the BigQuery console's "Format" does: keywords upper case, one clause per line. */
+  function formatQuery() {
+    if (!sql.trim()) return;
+    try {
+      setSql(format(sql, { language: "bigquery", keywordCase: "upper", tabWidth: 2, linesBetweenQueries: 1 }));
+      setQueryError("");
+    } catch (e) {
+      // half-written SQL can't be formatted; say so and leave it as it is
+      setQueryError(`Couldn't format the query: ${errorText(e).split("\n")[0]}`);
+    }
+  }
+
   async function runQuery(text = sql, db = database) {
     if (!text.trim()) return;
     setRunning(true);
@@ -186,7 +201,7 @@ export function DataStudio() {
     try {
       const out = await api<StudioResult>("/studio/query", {
         method: "POST",
-        json: { target_type: source, database: db || null, sql: text },
+        json: { database: db || null, sql: text },
       });
       setResult(out);
       setRanSql(text);
@@ -259,29 +274,6 @@ export function DataStudio() {
               <PanelLeftIcon width={17} height={17} />
             </button>
           </div>
-          <div className="grid grid-cols-2 gap-1 rounded-full bg-surface p-1">
-            {SOURCES.map((s) => {
-              const count = (tables ?? []).filter((t) => t.target_type === s.value).length;
-              return (
-                <button
-                  key={s.value}
-                  type="button"
-                  onClick={() => {
-                    if (s.value === source || !confirmDiscard()) return;
-                    setSource(s.value);
-                    setResult(null);
-                    discardChanges();
-                    setSql("");
-                  }}
-                  className={`rounded-full px-2 py-1.5 text-xs font-semibold ${
-                    source === s.value ? "bg-chip-active text-chip-active-text" : "text-muted hover:text-fg"
-                  }`}
-                >
-                  {s.label} <span className="font-normal opacity-70 tabular">{count}</span>
-                </button>
-              );
-            })}
-          </div>
 
           {!tables ? (
             <p className="flex items-center gap-2 px-2 py-3 text-sm text-muted">
@@ -289,18 +281,16 @@ export function DataStudio() {
             </p>
           ) : bySource.length === 0 ? (
             <p className="px-2 py-3 text-sm text-muted">
-              No {source === "bigquery" ? "BigQuery" : "PostgreSQL"} tables are onboarded yet.{" "}
+              No BigQuery tables are onboarded yet.{" "}
               <Link href="/onboarding/new" className="font-medium text-brand hover:underline">
                 Ask for one
               </Link>
             </p>
           ) : (
-            <nav aria-label="Onboarded tables" className="flex flex-col gap-1">
-              <p className="px-2 pt-1 text-xs font-semibold uppercase tracking-wide text-muted">
-                {source === "bigquery" ? "Datasets" : "Databases"}
-              </p>
+            <nav aria-label="Onboarded tables" className="flex flex-col">
               {databases.map((db) => {
-                const expanded = open[db] ?? true;
+                // like the BigQuery console: datasets start folded, except the one in use
+                const expanded = open[db] ?? db === database;
                 const inDb = bySource.filter((t) => (t.database ?? "") === db);
                 return (
                   <div key={db}>
@@ -308,17 +298,18 @@ export function DataStudio() {
                       type="button"
                       onClick={() => setOpen((o) => ({ ...o, [db]: !expanded }))}
                       aria-expanded={expanded}
-                      className={`flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-sm font-medium hover:bg-surface ${
-                        db === database ? "text-brand" : ""
-                      }`}
+                      className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-sm hover:bg-surface"
                     >
-                      {expanded ? <ChevronDownIcon width={15} height={15} /> : <ChevronRightIcon width={15} height={15} />}
-                      <DatabaseIcon width={15} height={15} className="shrink-0 text-muted" />
+                      {expanded ? (
+                        <ChevronDownIcon width={14} height={14} className="shrink-0 text-muted" />
+                      ) : (
+                        <ChevronRightIcon width={14} height={14} className="shrink-0 text-muted" />
+                      )}
+                      <DatasetIcon width={16} height={16} className="shrink-0 text-muted" />
                       <span className="truncate">{db}</span>
-                      <span className="ml-auto text-xs font-normal text-muted tabular">{inDb.length}</span>
                     </button>
                     {expanded && (
-                      <ul className="ml-4 border-l border-line pl-2">
+                      <ul className="pl-5">
                         {inDb.map((t) => {
                           const active = (picked ?? result?.target_id) === t.target_id;
                           return (
@@ -326,14 +317,13 @@ export function DataStudio() {
                               <button
                                 type="button"
                                 onClick={() => pickTable(t)}
-                                title={`Write a query for ${t.table}`}
-                                className={`w-full rounded-lg px-2 py-1.5 text-left hover:bg-surface ${active ? "bg-surface" : ""}`}
+                                title={t.label === t.table ? t.table : `${t.table} (${t.label})`}
+                                className={`flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-sm hover:bg-surface ${
+                                  active ? "bg-brand/10 font-medium text-brand" : ""
+                                }`}
                               >
-                                <span className={`block truncate text-sm ${active ? "font-semibold text-brand" : ""}`}>{t.table}</span>
-                                <span className="block truncate text-xs text-muted">
-                                  {t.label}
-                                  {t.write_modes.includes("upsert") ? " · editable" : " · add rows"}
-                                </span>
+                                <BqTableIcon width={15} height={15} className="shrink-0 text-muted" />
+                                <span className="truncate">{t.table}</span>
                               </button>
                             </li>
                           );
@@ -366,11 +356,11 @@ export function DataStudio() {
                   title="Show the table list"
                 >
                   <PanelLeftIcon width={16} height={16} />
-                  {source === "bigquery" ? "BigQuery" : "PostgreSQL"} tables
+                  BigQuery tables
                 </button>
               )}
               <label className="flex items-center gap-2 text-xs font-medium text-muted">
-                {source === "bigquery" ? "Default dataset" : "Database"}
+                Default dataset
                 <select
                   value={database}
                   onChange={(e) => setDatabase(e.target.value)}
@@ -385,6 +375,15 @@ export function DataStudio() {
                 </select>
               </label>
               <span className="ml-auto hidden text-xs text-muted sm:inline">⌘/Ctrl + Enter to run · read-only SELECT</span>
+              <button
+                type="button"
+                className={btn.secondary}
+                onClick={formatQuery}
+                disabled={!sql.trim()}
+                title="Format the query (⌘/Ctrl + Shift + F)"
+              >
+                Format
+              </button>
               <button type="button" className={btn.secondary} onClick={exportResult} disabled={!(ranSql || sql).trim()}>
                 <DownloadIcon width={16} height={16} />
                 Export to My files
@@ -402,6 +401,10 @@ export function DataStudio() {
                 if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                   e.preventDefault();
                   if (confirmDiscard()) runQuery();
+                }
+                if (e.key.toLowerCase() === "f" && e.shiftKey && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  formatQuery();
                 }
               }}
               spellCheck={false}
@@ -492,7 +495,7 @@ export function DataStudio() {
 
       {exporting && (
         <ExportDialog
-          query={{ target_type: source, database: database || null, sql: ranSql || sql }}
+          query={{ database: database || null, sql: ranSql || sql }}
           suggested={`${(tables ?? []).find((t) => t.target_id === (picked ?? result?.target_id))?.table ?? "query"}-export`}
           onClose={() => setExporting(false)}
           onSaved={(out) => {
@@ -1049,7 +1052,7 @@ function ExportDialog({
   onClose,
   onSaved,
 }: {
-  query: { target_type: Source; database: string | null; sql: string };
+  query: { database: string | null; sql: string };
   suggested: string;
   onClose: () => void;
   onSaved: (out: { file: WsFile; truncated: boolean; folder: string }) => void;

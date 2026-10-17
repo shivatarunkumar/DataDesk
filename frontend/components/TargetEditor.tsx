@@ -4,9 +4,17 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { api, errorText } from "@/lib/api";
-import { TARGET_LABELS, timeAgo } from "@/lib/format";
+import { timeAgo } from "@/lib/format";
 import { notifyPendingChanged } from "@/lib/pending";
-import type { AccessReport, ColumnRule, OnboardedTarget, SourceTable, TableColumn, TargetType } from "@/lib/types";
+import type {
+  AccessReport,
+  CloudRunContract,
+  ColumnRule,
+  FileUploadSettings,
+  OnboardedTarget,
+  SourceTable,
+  TableColumn,
+} from "@/lib/types";
 import { ArrowLeftIcon, CheckIcon, CloseIcon, SaveIcon, ShieldIcon, SpinnerIcon } from "./icons";
 import { ContractSummary } from "./ContractSummary";
 import { Alert, Dialog, Field, StatusPill, btn, inputClass } from "./ui";
@@ -22,6 +30,8 @@ type Draft = {
   min_length: string;
   max_length: string;
   description: string;
+  format: string;
+  severity: "error" | "warning";
 };
 
 const EMPTY: Draft = {
@@ -34,13 +44,12 @@ const EMPTY: Draft = {
   min_length: "",
   max_length: "",
   description: "",
+  format: "",
+  severity: "error",
 };
 
-const SOURCES: { value: TargetType; hint: string }[] = [
-  { value: "bigquery", hint: "A table in a BigQuery dataset" },
-  { value: "postgres", hint: "A table on the target Postgres server" },
-  { value: "oracle", hint: "Coming soon" },
-];
+const NO_FILE_UPLOAD: FileUploadSettings = { enabled: false, file_prefix: null, load_mode: "append", formats: ["csv", "xlsx"] };
+
 
 const cell = "h-8 w-full rounded-md border border-line bg-bg px-2 text-sm outline-none focus:border-brand";
 
@@ -49,6 +58,9 @@ function isNumeric(type: string) {
 }
 function isText(type: string) {
   return /char|text|string/i.test(type);
+}
+function isDate(type: string) {
+  return /date|time/i.test(type);
 }
 
 function toDraft(rule: ColumnRule | undefined): Draft {
@@ -64,6 +76,8 @@ function toDraft(rule: ColumnRule | undefined): Draft {
     min_length: str(rule.min_length),
     max_length: str(rule.max_length),
     description: rule.description ?? "",
+    format: rule.format ?? "",
+    severity: rule.severity === "warning" ? "warning" : "error",
   };
 }
 
@@ -80,6 +94,8 @@ function toRule(name: string, d: Draft): ColumnRule {
     min_length: num(d.min_length),
     max_length: num(d.max_length),
     description: d.description.trim() || null,
+    format: d.format.trim() || null,
+    severity: d.severity,
   };
 }
 
@@ -93,11 +109,10 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
   const editing = Boolean(targetId);
 
   const [existing, setExisting] = useState<OnboardedTarget | null>(null);
-  const [type, setType] = useState<TargetType | "">("");
   const [databases, setDatabases] = useState<string[] | null>(null);
   const [database, setDatabase] = useState("");
   const [tables, setTables] = useState<SourceTable[] | null>(null);
-  const [tableKey, setTableKey] = useState(""); // "schema.table" or "table"
+  const [tableKey, setTableKey] = useState(""); // the table's name
   const [columns, setColumns] = useState<TableColumn[] | null>(null);
   const [loadingColumns, setLoadingColumns] = useState(false);
 
@@ -105,6 +120,10 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
   const [description, setDescription] = useState("");
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [maxRows, setMaxRows] = useState("");
+  const [minRows, setMinRows] = useState("");
+  const [fileUpload, setFileUpload] = useState<FileUploadSettings>(NO_FILE_UPLOAD);
+  // the rules Cloud Run already had for this table, filled in when it was picked
+  const [fromCloudRun, setFromCloudRun] = useState<CloudRunContract | null>(null);
   const [modes, setModes] = useState<("append" | "upsert")[]>(["append"]);
   const [keys, setKeys] = useState<string[]>([]);
   const [active, setActive] = useState(true);
@@ -125,14 +144,15 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
     api<OnboardedTarget>(`/onboarding/targets/${targetId}`)
       .then((t) => {
         setExisting(t);
-        setType(t.target_type);
         setDatabase(t.database_name);
-        setTableKey(t.schema_name ? `${t.schema_name}.${t.table_name}` : t.table_name);
+        setTableKey(t.table_name);
         setColumns(t.schema_snapshot ?? []);
         setDisplayName(t.display_name);
         setDescription(t.description ?? "");
         setDrafts(Object.fromEntries(t.contract.columns.map((c) => [c.name, toDraft(c)])));
         setMaxRows(t.contract.max_rows ? String(t.contract.max_rows) : "");
+        setMinRows(t.contract.min_rows ? String(t.contract.min_rows) : "");
+        setFileUpload({ ...NO_FILE_UPLOAD, ...(t.contract.file_upload ?? {}) });
         setModes(t.write_modes);
         setKeys(t.key_columns);
         setActive(t.is_active);
@@ -143,40 +163,52 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
 
   // creating: the source pickers, each step loading the next list
   useEffect(() => {
-    if (editing || !type || type === "oracle") return;
-    setDatabases(null);
-    api<string[]>(`/onboarding/sources/${type}/databases`)
+    if (editing) return;
+    api<string[]>("/onboarding/sources/datasets")
       .then(setDatabases)
       .catch((e) => setError(errorText(e)));
-  }, [type, editing]);
+  }, [editing]);
 
   useEffect(() => {
-    if (editing || !type || !database) return;
+    if (editing || !database) return;
     setTables(null);
-    api<SourceTable[]>(`/onboarding/sources/${type}/databases/${encodeURIComponent(database)}/tables`)
+    api<SourceTable[]>(`/onboarding/sources/datasets/${encodeURIComponent(database)}/tables`)
       .then(setTables)
       .catch((e) => setError(errorText(e)));
-  }, [type, database, editing]);
+  }, [database, editing]);
 
-  const chosenTable = tables?.find((t) => (t.schema_name ? `${t.schema_name}.${t.table}` : t.table) === tableKey);
+  const chosenTable = tables?.find((t) => t.table === tableKey);
 
   useEffect(() => {
     if (editing || !chosenTable) return;
     setLoadingColumns(true);
     setColumns(null);
-    const qs = chosenTable.schema_name ? `?schema=${encodeURIComponent(chosenTable.schema_name)}` : "";
     api<TableColumn[]>(
-      `/onboarding/sources/${type}/databases/${encodeURIComponent(database)}/tables/${encodeURIComponent(chosenTable.table)}/columns${qs}`,
+      `/onboarding/sources/datasets/${encodeURIComponent(database)}/tables/${encodeURIComponent(chosenTable.table)}/columns`,
     )
-      .then((cols) => {
+      .then(async (cols) => {
         setColumns(cols);
         setDrafts({});
         setKeys([]);
+        setMinRows("");
+        setMaxRows("");
+        setFileUpload(NO_FILE_UPLOAD);
+        setFromCloudRun(null);
         setDisplayName((name) => name || humanize(chosenTable.table));
+        // start from the contract Cloud Run already has for this table, if any
+        const found = await api<CloudRunContract | null>(
+          `/onboarding/sources/datasets/${encodeURIComponent(database)}/tables/${encodeURIComponent(chosenTable.table)}/cloud-run-contract`,
+        ).catch(() => null);
+        if (!found) return;
+        setFromCloudRun(found);
+        setDrafts(Object.fromEntries(found.contract.columns.map((c) => [c.name, toDraft(c)])));
+        setMinRows(found.contract.min_rows ? String(found.contract.min_rows) : "");
+        setMaxRows(found.contract.max_rows ? String(found.contract.max_rows) : "");
+        setFileUpload({ ...NO_FILE_UPLOAD, ...(found.contract.file_upload ?? {}) });
       })
       .catch((e) => setError(errorText(e)))
       .finally(() => setLoadingColumns(false));
-  }, [chosenTable, type, database, editing]);
+  }, [chosenTable, database, editing]);
 
   const draftOf = (name: string) => drafts[name] ?? EMPTY;
   const setDraft = (name: string, patch: Partial<Draft>) =>
@@ -200,7 +232,15 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
       document.getElementById("request-reason")?.scrollIntoView({ behavior: "smooth", block: "center" });
       return null;
     }
-    const contract = { columns: ruleColumns, max_rows: maxRows.trim() ? Number(maxRows) : null };
+    const contract = {
+      columns: ruleColumns,
+      min_rows: minRows.trim() ? Number(minRows) : null,
+      max_rows: maxRows.trim() ? Number(maxRows) : null,
+      file_upload:
+        fileUpload.enabled || fileUpload.file_prefix
+          ? { ...fileUpload, file_prefix: fileUpload.file_prefix?.trim() || null }
+          : null,
+    };
     try {
       if (editing && existing) {
         const updated = await api<OnboardedTarget>(`/onboarding/targets/${existing.id}`, {
@@ -221,9 +261,7 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
       return await api<OnboardedTarget>("/onboarding/targets", {
         method: "POST",
         json: {
-          target_type: type,
           database_name: database,
-          schema_name: chosenTable?.schema_name ?? null,
           table_name: chosenTable?.table,
           display_name: displayName,
           description: description || null,
@@ -281,20 +319,24 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
   }
 
   // a result is only true for the table, modes and key it was run with
-  const accessKey = `${type}|${database}|${tableKey}|${modes.join()}|${keys.join()}`;
+  const accessKey = `${database}|${tableKey}|${modes.join()}|${keys.join()}|${fileUpload.enabled}`;
   useEffect(() => setAccess(null), [accessKey]);
 
   async function testAccess() {
     setTesting(true);
     setError("");
     try {
-      const [schemaName, tableName] = existing
-        ? [existing.schema_name, existing.table_name]
-        : [chosenTable?.schema_name ?? null, chosenTable?.table ?? ""];
+      const tableName = existing ? existing.table_name : (chosenTable?.table ?? "");
       setAccess(
-        await api<AccessReport>(`/onboarding/sources/${type}/access-check`, {
+        await api<AccessReport>("/onboarding/sources/access-check", {
           method: "POST",
-          json: { database_name: database, schema_name: schemaName, table_name: tableName, write_modes: modes, key_columns: keys },
+          json: {
+            database_name: database,
+            table_name: tableName,
+            write_modes: modes,
+            key_columns: keys,
+            file_upload: fileUpload.enabled,
+          },
         }),
       );
       setTimeout(() => document.getElementById("access-report")?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 50);
@@ -305,12 +347,15 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
     }
   }
 
-  const location = existing?.location ?? [database, chosenTable?.schema_name, chosenTable?.table].filter(Boolean).join(".");
+  const location = existing?.location ?? [database, chosenTable?.table].filter(Boolean).join(".");
 
   // Sending, onboarding or approving needs a passing access check for exactly what is on
   // screen (the result clears when the table, modes or key change). The server checks again.
   const loadsChanged =
-    !!existing && (modes.join() !== existing.write_modes.join() || keys.join() !== existing.key_columns.join());
+    !!existing &&
+    (modes.join() !== existing.write_modes.join() ||
+      keys.join() !== existing.key_columns.join() ||
+      (fileUpload.enabled && !existing.contract.file_upload?.enabled));
   const needsAccess = !editing || reviewing || loadsChanged;
   const accessOk = access?.ok === true;
   const blocked = needsAccess && !accessOk;
@@ -329,7 +374,7 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
           </h1>
           <p className="text-sm text-muted">
             {editing && existing
-              ? `${TARGET_LABELS[existing.target_type]} · ${existing.location}${pending ? "" : ` · contract v${existing.contract_version}`}`
+              ? `BigQuery · ${existing.location}${pending ? "" : ` · contract v${existing.contract_version}`}`
               : isAdmin
                 ? "Choose the table, write its data contract, and open it for loads."
                 : "Choose the table and propose its data contract. An admin reviews it before anyone can load into it."}
@@ -365,78 +410,54 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
       <Section step={1} title="Source">
         {editing ? (
           <p className="text-sm">
-            <span className="font-medium">{existing && TARGET_LABELS[existing.target_type]}</span>{" "}
+            <span className="font-medium">BigQuery</span>{" "}
             <span className="text-muted">·</span> {existing?.location}
             <span className="block text-xs text-muted">To point at another table, onboard it separately.</span>
           </p>
         ) : (
           <div className="flex flex-col gap-4">
-            <div className="grid gap-2 sm:grid-cols-3">
-              {SOURCES.map((s) => (
-                <button
-                  key={s.value}
-                  type="button"
-                  disabled={s.value === "oracle"}
-                  onClick={() => {
-                    setType(s.value);
-                    setDatabase("");
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="flex flex-col gap-1.5 text-sm font-medium">
+                BigQuery dataset
+                <select
+                  className={`${inputClass} font-normal`}
+                  value={database}
+                  disabled={!databases}
+                  onChange={(e) => {
+                    setDatabase(e.target.value);
                     setTableKey("");
                     setColumns(null);
-                    setError("");
                   }}
-                  className={`rounded-xl border px-3 py-2.5 text-left disabled:cursor-not-allowed disabled:opacity-50 ${
-                    type === s.value ? "border-brand bg-brand/5 ring-1 ring-brand" : "border-line hover:bg-surface"
-                  }`}
                 >
-                  <span className="block text-sm font-semibold">{TARGET_LABELS[s.value]}</span>
-                  <span className="block text-xs text-muted">{s.hint}</span>
-                </button>
-              ))}
-            </div>
-            {type && type !== "oracle" && (
-              <div className="grid gap-4 sm:grid-cols-2">
-                <label className="flex flex-col gap-1.5 text-sm font-medium">
-                  {type === "bigquery" ? "Dataset" : "Database"}
-                  <select
-                    className={`${inputClass} font-normal`}
-                    value={database}
-                    disabled={!databases}
-                    onChange={(e) => {
-                      setDatabase(e.target.value);
-                      setTableKey("");
-                      setColumns(null);
-                    }}
-                  >
-                    <option value="">{databases ? "Choose…" : "Loading…"}</option>
-                    {(databases ?? []).map((d) => (
-                      <option key={d} value={d}>
-                        {d}
+                  <option value="">{databases ? "Choose…" : "Loading…"}</option>
+                  {(databases ?? []).map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1.5 text-sm font-medium">
+                Table
+                <select
+                  className={`${inputClass} font-normal`}
+                  value={tableKey}
+                  disabled={!database || !tables}
+                  onChange={(e) => setTableKey(e.target.value)}
+                >
+                  <option value="">{database && !tables ? "Loading…" : "Choose…"}</option>
+                  {(tables ?? []).map((t) => {
+                    const key = t.table;
+                    return (
+                      <option key={key} value={key} disabled={Boolean(t.onboarded_id)}>
+                        {key}
+                        {t.onboarded_id ? " — already onboarded" : ""}
                       </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="flex flex-col gap-1.5 text-sm font-medium">
-                  Table
-                  <select
-                    className={`${inputClass} font-normal`}
-                    value={tableKey}
-                    disabled={!database || !tables}
-                    onChange={(e) => setTableKey(e.target.value)}
-                  >
-                    <option value="">{database && !tables ? "Loading…" : "Choose…"}</option>
-                    {(tables ?? []).map((t) => {
-                      const key = t.schema_name ? `${t.schema_name}.${t.table}` : t.table;
-                      return (
-                        <option key={key} value={key} disabled={Boolean(t.onboarded_id)}>
-                          {key}
-                          {t.onboarded_id ? " — already onboarded" : ""}
-                        </option>
-                      );
-                    })}
-                  </select>
-                </label>
-              </div>
-            )}
+                    );
+                  })}
+                </select>
+              </label>
+            </div>
             {loadingColumns && (
               <p className="flex items-center gap-2 text-sm text-muted">
                 <SpinnerIcon /> Reading the table&apos;s columns…
@@ -490,11 +511,24 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
             title="Data contract"
             hint="Checked on every file, on top of the table's own schema (types, NOT NULL). Leave a field empty for no rule."
           >
+            {fromCloudRun && (
+              <div className="mb-4">
+                <Alert tone="info">
+                  Filled in from the contract Cloud Run has today ({fromCloudRun.source}). Check it, then save: DataDesk owns it
+                  from then on and replaces that file.
+                  {fromCloudRun.notes.map((n) => (
+                    <span key={n} className="mt-1 block text-warn">
+                      {n}
+                    </span>
+                  ))}
+                </Alert>
+              </div>
+            )}
             {columns.length === 0 ? (
               <p className="text-sm text-muted">The table has no columns.</p>
             ) : (
               <div className="overflow-x-auto rounded-xl border border-line">
-                <table className="w-full min-w-[1000px] text-sm">
+                <table className="w-full min-w-[1120px] text-sm">
                   <thead className="bg-surface text-left text-xs uppercase tracking-wide text-muted">
                     <tr>
                       <th className="px-3 py-2 font-semibold">Column</th>
@@ -506,7 +540,10 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
                       </th>
                       <th className="px-2 py-2 font-semibold">Allowed values</th>
                       <th className="px-2 py-2 font-semibold">Pattern (regex)</th>
-                      <th className="px-2 py-2 font-semibold">Range / length</th>
+                      <th className="px-2 py-2 font-semibold">Range / length / format</th>
+                      <th className="px-2 py-2 font-semibold" title="Warning: a failing value is shown but doesn't stop the file">
+                        If it fails
+                      </th>
                       <th className="px-2 py-2 font-semibold">Note</th>
                     </tr>
                   </thead>
@@ -515,6 +552,7 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
                       const d = draftOf(c.name);
                       const numeric = isNumeric(c.type);
                       const text = isText(c.type);
+                      const dated = isDate(c.type);
                       return (
                         <tr key={c.name} className="border-t border-line align-top">
                           <td className="px-3 py-2">
@@ -582,9 +620,29 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
                                 name={c.name}
                                 integer
                               />
+                            ) : dated ? (
+                              <input
+                                className={`${cell} font-mono text-xs`}
+                                value={d.format}
+                                onChange={(e) => setDraft(c.name, { format: e.target.value })}
+                                placeholder="ISO, or e.g. %d/%m/%Y"
+                                title="strptime format, when files don't use ISO 8601 (2026-10-17)"
+                                aria-label={`${c.name} date format`}
+                              />
                             ) : (
                               <span className="block pt-2 text-xs text-muted">checked by type</span>
                             )}
+                          </td>
+                          <td className="px-2 py-2">
+                            <select
+                              className={`${cell} ${d.severity === "warning" ? "text-warn" : ""}`}
+                              value={d.severity}
+                              onChange={(e) => setDraft(c.name, { severity: e.target.value as Draft["severity"] })}
+                              aria-label={`${c.name} severity`}
+                            >
+                              <option value="error">Stop the file</option>
+                              <option value="warning">Warn only</option>
+                            </select>
                           </td>
                           <td className="px-2 py-2">
                             <input
@@ -602,7 +660,15 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
                 </table>
               </div>
             )}
-            <div className="mt-4 max-w-xs">
+            <div className="mt-4 grid max-w-xl gap-4 sm:grid-cols-2">
+              <Field
+                label="Fewest rows per file"
+                type="number"
+                value={minRows}
+                onChange={setMinRows}
+                placeholder="1"
+                hint="Optional. Smaller files are refused."
+              />
               <Field
                 label="Most rows per file"
                 type="number"
@@ -679,6 +745,19 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
               </span>
             </label>
             )}
+          </Section>
+
+          <Section
+            step={5}
+            title="File upload (Cloud Run)"
+            hint="Send files to this table through the Cloud Run file processor from the File upload tab. The contract above is published to Cloud Run, so both check the same rules."
+          >
+            <FileUploadFields
+              value={fileUpload}
+              onChange={setFileUpload}
+              table={existing?.table_name ?? chosenTable?.table ?? ""}
+              published={existing?.contract_published ?? null}
+            />
           </Section>
 
           {access && <AccessResults report={access} upsert={modes.includes("upsert")} />}
@@ -765,6 +844,109 @@ export function TargetEditor({ targetId, isAdmin }: { targetId?: string; isAdmin
   );
 }
 
+/** How files reach the table through Cloud Run: the name they land under, and append or overwrite. */
+function FileUploadFields({
+  value,
+  onChange,
+  table,
+  published,
+}: {
+  value: FileUploadSettings;
+  onChange: (v: FileUploadSettings) => void;
+  table: string;
+  published: OnboardedTarget["contract_published"];
+}) {
+  const prefix = value.file_prefix?.trim().replace(/[_-]+$/, "") || table;
+  const set = (patch: Partial<FileUploadSettings>) => onChange({ ...value, ...patch });
+  return (
+    <div className="flex flex-col gap-4">
+      <label className="flex items-start gap-2 text-sm">
+        <input
+          type="checkbox"
+          className="mt-0.5 h-4 w-4 accent-[var(--brand)]"
+          checked={value.enabled}
+          onChange={(e) => set({ enabled: e.target.checked })}
+        />
+        <span>
+          <span className="font-medium">Take files through Cloud Run</span>
+          <span className="block text-xs text-muted">
+            The table appears in File upload. Approved files go to the landing bucket and Cloud Run loads them.
+          </span>
+        </span>
+      </label>
+      {value.enabled && (
+        <>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field
+              label="File name prefix"
+              value={value.file_prefix ?? ""}
+              onChange={(v) => set({ file_prefix: v })}
+              placeholder={table}
+              hint={`Files land as ${prefix}_YYYYMMDD.${value.formats.join(" or .")} (the _ before the date is added for you)`}
+            />
+            <fieldset className="text-sm">
+              <legend className="mb-1.5 font-medium">Formats</legend>
+              <div className="flex gap-4 pt-2">
+                {(["csv", "xlsx"] as const).map((f) => (
+                  <label key={f} className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-[var(--brand)]"
+                      checked={value.formats.includes(f)}
+                      onChange={(e) => {
+                        const next = e.target.checked ? [...value.formats, f] : value.formats.filter((x) => x !== f);
+                        if (next.length) set({ formats: next });
+                      }}
+                    />
+                    {f === "csv" ? "CSV" : "Excel (.xlsx)"}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          </div>
+          <fieldset className="text-sm">
+            <legend className="mb-1.5 font-medium">Load mode</legend>
+            <div className="flex flex-wrap gap-4">
+              {(
+                [
+                  ["append", "Append", "Every file's rows are added to the table"],
+                  ["overwrite", "Overwrite", "Each file replaces the whole table"],
+                ] as const
+              ).map(([m, label, hint]) => (
+                <label key={m} className="flex items-start gap-2">
+                  <input type="radio" className="mt-0.5" checked={value.load_mode === m} onChange={() => set({ load_mode: m })} />
+                  <span>
+                    <span className="font-medium">{label}</span>
+                    <span className="block text-xs text-muted">{hint}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <p className="mt-1.5 text-xs text-muted">People sending files can&apos;t change this.</p>
+          </fieldset>
+          <p className="text-xs text-muted">
+            The file needs every column of the table except Cloud Run&apos;s own (_job_id, _source_file, _loaded_at), in table
+            order, with a header row.
+          </p>
+        </>
+      )}
+      {published ? (
+        <p className="flex items-start gap-2 text-sm text-ok">
+          <CheckIcon width={16} height={16} className="mt-0.5 shrink-0" />
+          <span>
+            Cloud Run has contract v{published.version}: <span className="break-all font-mono text-xs">{published.uri}</span>{" "}
+            <span className="text-muted">· published {timeAgo(published.published_at)}</span>
+          </span>
+        </p>
+      ) : (
+        value.enabled && (
+          <p className="text-xs text-muted">Published to Cloud Run when the table is saved, approved and open for loads.</p>
+        )
+      )}
+    </div>
+  );
+}
+
 /** "active", "paused", "pending", "rejected": what the status pill says. */
 export function onboardingState(t: OnboardedTarget): string {
   if (t.onboarding_status !== "approved") return t.onboarding_status;
@@ -813,7 +995,7 @@ function TargetView({ target: t }: { target: OnboardedTarget }) {
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-2xl">{t.display_name}</h1>
           <p className="text-sm text-muted">
-            {TARGET_LABELS[t.target_type]} · {t.location}
+            BigQuery · {t.location}
             {t.onboarding_status === "approved" ? ` · contract v${t.contract_version}` : ""}
           </p>
         </div>
@@ -873,23 +1055,30 @@ function TargetView({ target: t }: { target: OnboardedTarget }) {
         columns={t.schema_snapshot}
         version={t.onboarding_status === "approved" ? t.contract_version : null}
       />
+      {t.contract.file_upload?.enabled && (
+        <p className="mt-4 text-sm text-muted">
+          Takes files through Cloud Run from{" "}
+          <Link href="/file-upload" className="font-medium text-brand hover:underline">
+            File upload
+          </Link>{" "}
+          as{" "}
+          <span className="font-mono text-xs text-fg">
+            {t.contract.file_upload.file_prefix || t.table_name}_YYYYMMDD.{t.contract.file_upload.formats.join(" or .")}
+          </span>
+          , {t.contract.file_upload.load_mode === "overwrite" ? "replacing the table" : "appending rows"}.
+        </p>
+      )}
     </div>
   );
 }
 
 const CHECK_LABELS: Record<string, string> = {
   identity: "Identity",
-  credentials: "Credentials",
-  connect: "Connection",
   dataset: "Dataset",
-  schema: "Schema",
   table: "Table",
   permissions: "Permissions",
   read: "Read",
   write: "Write",
-  select: "SELECT",
-  insert: "INSERT",
-  update: "UPDATE",
   jobs: "Jobs",
   "upsert key": "Upsert key",
   "staging table": "Staging table",
@@ -897,11 +1086,6 @@ const CHECK_LABELS: Record<string, string> = {
 
 /** One line per check: what DataDesk's own account can do with the table, and the fix. */
 function AccessResults({ report, upsert }: { report: AccessReport; upsert: boolean }) {
-  // the SQL fixes, gathered so a database owner can run them in one go
-  const statements = report.checks
-    .filter((c) => !c.ok && /^(GRANT|CREATE|ALTER)\b/.test(c.hint))
-    .map((c) => (c.hint.endsWith(";") ? c.hint : c.hint.split(";")[0] + ";"));
-  const [copied, setCopied] = useState(false);
   return (
     <section
       id="access-report"
@@ -940,24 +1124,6 @@ function AccessResults({ report, upsert }: { report: AccessReport; upsert: boole
           </li>
         ))}
       </ul>
-      {statements.length > 0 && (
-        <div className="border-t border-line bg-surface px-5 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-medium">Run as the table&apos;s owner or a DBA to fix these</p>
-            <button
-              type="button"
-              className={btn.secondary}
-              onClick={() => {
-                navigator.clipboard?.writeText(statements.join("\n")).then(() => setCopied(true));
-                setTimeout(() => setCopied(false), 2000);
-              }}
-            >
-              {copied ? "Copied" : "Copy SQL"}
-            </button>
-          </div>
-          <pre className="mt-2 overflow-x-auto rounded-lg bg-bg p-3 text-xs">{statements.join("\n")}</pre>
-        </div>
-      )}
     </section>
   );
 }

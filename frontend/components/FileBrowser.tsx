@@ -30,7 +30,7 @@ type Upload = { id: number; name: string; progress: number; error?: string; done
 const ACCEPT = ".csv,.tsv,.xlsx,.json";
 
 /** Upload with progress: fetch() can't report upload progress, XMLHttpRequest can. */
-function uploadWithProgress(file: File, folderId: string | null, onProgress: (pct: number) => void): Promise<WsFile> {
+export function uploadWithProgress(file: File, folderId: string | null, onProgress: (pct: number) => void): Promise<WsFile> {
   return new Promise((resolve, reject) => {
     const form = new FormData();
     form.append("file", file);

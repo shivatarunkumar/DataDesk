@@ -28,7 +28,6 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import psycopg
 from psycopg import sql
@@ -248,48 +247,6 @@ def step_seed(database_url: str) -> None:
     log.info("step 3/3 done: seed data is up to date")
 
 
-def step_loader_role(admin_url: str) -> None:
-    """DataDesk's own login for the target tables (TARGET_DATABASE_URL): created with no
-    privileges at all. Onboarding a table means granting this login exactly what the table
-    needs, and the access check in the app lists the GRANTs."""
-    target_url = os.environ.get("TARGET_DATABASE_URL", "")
-    if not target_url:
-        log.info("loader login skipped: TARGET_DATABASE_URL is not set")
-        return
-    target_url = for_this_host(sync_url(target_url), "TARGET_DATABASE_URL")
-    user, password, _ = url_parts(target_url)
-    same_server = (urlsplit(target_url).hostname, urlsplit(target_url).port or 5432) == (
-        urlsplit(admin_url).hostname,
-        urlsplit(admin_url).port or 5432,
-    )
-    if not same_server:
-        log.info(
-            "loader login: TARGET_DATABASE_URL is on another server; create %s there with "
-            "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE and grant it per table",
-            user,
-        )
-        return
-    with connect(admin_url, autocommit=True, what="server") as conn:
-        row = conn.execute("SELECT rolsuper FROM pg_roles WHERE rolname = %s", (user,)).fetchone()
-        if row is None:
-            conn.execute(
-                sql.SQL("CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD {}").format(
-                    sql.Identifier(user), sql.Literal(password)
-                )
-            )
-            log.info("loader login %s created, with no table privileges until they are granted", user)
-        elif row[0]:
-            log.warning(
-                "loader login %s is a SUPERUSER: DataDesk would load with unlimited rights. Point "
-                "TARGET_DATABASE_URL at its own login, e.g. datadesk_loader",
-                user,
-            )
-        else:
-            statement = sql.SQL("ALTER ROLE {} PASSWORD {}")
-            conn.execute(statement.format(sql.Identifier(user), sql.Literal(password)))
-            log.info("loader login %s is in place (password kept in sync with .env)", user)
-
-
 def step_verify(database_url: str, db_name: str) -> None:
     with connect(database_url, what="database") as conn:
         tables = conn.execute("SELECT count(*) FROM pg_tables WHERE schemaname = 'public'").fetchone()[0]
@@ -301,7 +258,6 @@ def step_verify(database_url: str, db_name: str) -> None:
         ).fetchone()[0]
         targets = conn.execute(
             "SELECT (SELECT count(*) FROM upload_targets WHERE is_active)"
-            " + (SELECT count(*) FROM pg_tables_catalog WHERE is_active)"
             " + (SELECT count(*) FROM bq_tables_cache)"
         ).fetchone()[0]
     log.info(
@@ -361,7 +317,6 @@ def main() -> int:
             log.info("step 3/3 skipped (--skip-seed)")
         else:
             step_seed(database_url)
-        step_loader_role(admin_url)
         step_verify(database_url, db_name)
 
         log.info('all done in %.1fs — connect with: psql "%s"', time.monotonic() - started, database_url)

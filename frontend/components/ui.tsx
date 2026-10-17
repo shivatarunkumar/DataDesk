@@ -161,6 +161,7 @@ const STATUS_STYLES: Record<string, string> = {
   suspended: "bg-bad/15 text-bad",
   paused: "bg-surface text-muted",
   pending_review: "bg-warn/15 text-warn",
+  processing: "bg-warn/15 text-warn",
 };
 
 export function StatusPill({ status }: { status: string }) {

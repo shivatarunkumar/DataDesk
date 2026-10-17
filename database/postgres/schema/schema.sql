@@ -117,50 +117,6 @@ CREATE TABLE public.bq_tables_cache (
 
 
 --
--- Name: db_access_grants; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.db_access_grants (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
-    scope_type text NOT NULL,
-    database_id uuid,
-    table_id uuid,
-    source_request_id uuid,
-    granted_by uuid NOT NULL,
-    granted_at timestamp with time zone DEFAULT now() NOT NULL,
-    expires_at timestamp with time zone,
-    revoked_at timestamp with time zone,
-    revoked_by uuid,
-    CONSTRAINT db_access_grants_check CHECK ((((scope_type = 'database'::text) AND (database_id IS NOT NULL)) OR ((scope_type = 'table'::text) AND (table_id IS NOT NULL)))),
-    CONSTRAINT db_access_grants_scope_type_check CHECK ((scope_type = ANY (ARRAY['database'::text, 'table'::text])))
-);
-
-
---
--- Name: db_access_requests; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.db_access_requests (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
-    scope_type text NOT NULL,
-    database_id uuid,
-    table_id uuid,
-    justification text,
-    duration_hours integer,
-    status text DEFAULT 'pending'::text NOT NULL,
-    reviewed_by uuid,
-    reviewed_at timestamp with time zone,
-    review_note text,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT db_access_requests_duration_hours_check CHECK ((duration_hours > 0)),
-    CONSTRAINT db_access_requests_scope_type_check CHECK ((scope_type = ANY (ARRAY['database'::text, 'table'::text]))),
-    CONSTRAINT db_access_requests_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'approved'::text, 'rejected'::text])))
-);
-
-
---
 -- Name: password_reset_requests; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -172,35 +128,6 @@ CREATE TABLE public.password_reset_requests (
     resolved_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT password_reset_requests_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'resolved'::text, 'cancelled'::text])))
-);
-
-
---
--- Name: pg_databases; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.pg_databases (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    name text NOT NULL,
-    description text,
-    is_active boolean DEFAULT true NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT pg_databases_name_check CHECK ((name ~ '^[A-Za-z_][A-Za-z0-9_]{0,62}$'::text))
-);
-
-
---
--- Name: pg_tables_catalog; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.pg_tables_catalog (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    database_id uuid NOT NULL,
-    table_name text NOT NULL,
-    description text,
-    is_active boolean DEFAULT true NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT pg_tables_catalog_table_name_check CHECK ((table_name ~ '^[A-Za-z_][A-Za-z0-9_]{0,62}$'::text))
 );
 
 
@@ -226,9 +153,8 @@ CREATE TABLE public.upload_requests (
     user_id uuid NOT NULL,
     file_id uuid NOT NULL,
     file_version integer NOT NULL,
-    target_type text NOT NULL,
+    target_type text DEFAULT 'bigquery'::text NOT NULL,
     target_database text,
-    target_schema text,
     target_table text NOT NULL,
     write_mode text NOT NULL,
     key_columns jsonb,
@@ -246,12 +172,21 @@ CREATE TABLE public.upload_requests (
     contract_version integer,
     origin text DEFAULT 'file'::text NOT NULL,
     change_summary jsonb,
-    CONSTRAINT upload_requests_origin_check CHECK ((origin = ANY (ARRAY['file'::text, 'studio'::text]))),
+    file_date date,
+    landing_name text,
+    landing_uri text,
+    landing_generation text,
+    landed_at timestamp with time zone,
+    pipeline jsonb,
+    pipeline_checked_at timestamp with time zone,
+    CONSTRAINT upload_requests_landing_name_check CHECK ((length(landing_name) <= 512)),
+    CONSTRAINT upload_requests_origin_check CHECK ((origin = ANY (ARRAY['file'::text, 'studio'::text, 'pipeline'::text]))),
+    CONSTRAINT upload_requests_pipeline_name_check CHECK (((origin <> 'pipeline'::text) OR (landing_name IS NOT NULL))),
     CONSTRAINT upload_requests_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'approved'::text, 'rejected'::text, 'completed'::text, 'failed'::text]))),
-    CONSTRAINT upload_requests_target_type_check CHECK ((target_type = ANY (ARRAY['postgres'::text, 'bigquery'::text, 'oracle'::text]))),
+    CONSTRAINT upload_requests_target_type_check CHECK ((target_type = 'bigquery'::text)),
     CONSTRAINT upload_requests_upsert_key_check CHECK (((write_mode <> 'upsert'::text) OR (jsonb_array_length(COALESCE(key_columns, '[]'::jsonb)) > 0))),
     CONSTRAINT upload_requests_validation_status_check CHECK ((validation_status = ANY (ARRAY['passed'::text, 'failed'::text]))),
-    CONSTRAINT upload_requests_write_mode_check CHECK ((write_mode = ANY (ARRAY['append'::text, 'upsert'::text, 'update'::text])))
+    CONSTRAINT upload_requests_write_mode_check CHECK ((write_mode = ANY (ARRAY['append'::text, 'upsert'::text, 'update'::text, 'overwrite'::text])))
 );
 
 
@@ -261,9 +196,8 @@ CREATE TABLE public.upload_requests (
 
 CREATE TABLE public.upload_targets (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    target_type text NOT NULL,
+    target_type text DEFAULT 'bigquery'::text NOT NULL,
     database_name text NOT NULL,
-    schema_name text,
     table_name text NOT NULL,
     display_name text NOT NULL,
     description text,
@@ -282,6 +216,7 @@ CREATE TABLE public.upload_targets (
     reviewed_by uuid,
     reviewed_at timestamp with time zone,
     review_note text,
+    contract_published jsonb,
     CONSTRAINT upload_targets_check CHECK ((('upsert'::text <> ALL (write_modes)) OR (jsonb_array_length(key_columns) > 0))),
     CONSTRAINT upload_targets_contract_version_check CHECK ((contract_version >= 1)),
     CONSTRAINT upload_targets_database_name_check CHECK (((database_name ~ '^[A-Za-z_][A-Za-z0-9_]*$'::text) AND (length(database_name) <= 1024))),
@@ -290,9 +225,8 @@ CREATE TABLE public.upload_targets (
     CONSTRAINT upload_targets_onboarding_status_check CHECK ((onboarding_status = ANY (ARRAY['pending'::text, 'approved'::text, 'rejected'::text]))),
     CONSTRAINT upload_targets_request_reason_check CHECK ((length(request_reason) <= 2000)),
     CONSTRAINT upload_targets_review_note_check CHECK ((length(review_note) <= 2000)),
-    CONSTRAINT upload_targets_schema_name_check CHECK ((schema_name ~ '^[A-Za-z_][A-Za-z0-9_]{0,62}$'::text)),
     CONSTRAINT upload_targets_table_name_check CHECK (((table_name ~ '^[A-Za-z_][A-Za-z0-9_]*$'::text) AND (length(table_name) <= 1024))),
-    CONSTRAINT upload_targets_target_type_check CHECK ((target_type = ANY (ARRAY['bigquery'::text, 'postgres'::text, 'oracle'::text]))),
+    CONSTRAINT upload_targets_target_type_check CHECK ((target_type = 'bigquery'::text)),
     CONSTRAINT upload_targets_write_modes_check CHECK (((cardinality(write_modes) > 0) AND (write_modes <@ ARRAY['append'::text, 'upsert'::text])))
 );
 
@@ -425,59 +359,11 @@ ALTER TABLE ONLY public.bq_tables_cache
 
 
 --
--- Name: db_access_grants db_access_grants_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.db_access_grants
-    ADD CONSTRAINT db_access_grants_pkey PRIMARY KEY (id);
-
-
---
--- Name: db_access_requests db_access_requests_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.db_access_requests
-    ADD CONSTRAINT db_access_requests_pkey PRIMARY KEY (id);
-
-
---
 -- Name: password_reset_requests password_reset_requests_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.password_reset_requests
     ADD CONSTRAINT password_reset_requests_pkey PRIMARY KEY (id);
-
-
---
--- Name: pg_databases pg_databases_name_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pg_databases
-    ADD CONSTRAINT pg_databases_name_key UNIQUE (name);
-
-
---
--- Name: pg_databases pg_databases_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pg_databases
-    ADD CONSTRAINT pg_databases_pkey PRIMARY KEY (id);
-
-
---
--- Name: pg_tables_catalog pg_tables_catalog_database_id_table_name_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pg_tables_catalog
-    ADD CONSTRAINT pg_tables_catalog_database_id_table_name_key UNIQUE (database_id, table_name);
-
-
---
--- Name: pg_tables_catalog pg_tables_catalog_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pg_tables_catalog
-    ADD CONSTRAINT pg_tables_catalog_pkey PRIMARY KEY (id);
 
 
 --
@@ -581,27 +467,6 @@ CREATE INDEX bq_access_requests_user_idx ON public.bq_access_requests USING btre
 
 
 --
--- Name: db_access_grants_active_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX db_access_grants_active_idx ON public.db_access_grants USING btree (user_id) WHERE (revoked_at IS NULL);
-
-
---
--- Name: db_access_requests_status_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX db_access_requests_status_idx ON public.db_access_requests USING btree (status);
-
-
---
--- Name: db_access_requests_user_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX db_access_requests_user_idx ON public.db_access_requests USING btree (user_id, status);
-
-
---
 -- Name: password_reset_requests_one_pending_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -609,17 +474,17 @@ CREATE UNIQUE INDEX password_reset_requests_one_pending_idx ON public.password_r
 
 
 --
--- Name: pg_tables_catalog_database_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX pg_tables_catalog_database_idx ON public.pg_tables_catalog USING btree (database_id);
-
-
---
 -- Name: upload_requests_file_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX upload_requests_file_idx ON public.upload_requests USING btree (file_id);
+
+
+--
+-- Name: upload_requests_in_flight_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX upload_requests_in_flight_idx ON public.upload_requests USING btree (landed_at) WHERE ((origin = 'pipeline'::text) AND (status = 'approved'::text));
 
 
 --
@@ -661,7 +526,7 @@ CREATE INDEX upload_targets_pending_idx ON public.upload_targets USING btree (cr
 -- Name: upload_targets_table_key; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX upload_targets_table_key ON public.upload_targets USING btree (target_type, database_name, COALESCE(schema_name, ''::text), table_name) WHERE (onboarding_status <> 'rejected'::text);
+CREATE UNIQUE INDEX upload_targets_table_key ON public.upload_targets USING btree (database_name, table_name) WHERE (onboarding_status <> 'rejected'::text);
 
 
 --
@@ -760,86 +625,6 @@ ALTER TABLE ONLY public.bq_access_requests
 
 
 --
--- Name: db_access_grants db_access_grants_database_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.db_access_grants
-    ADD CONSTRAINT db_access_grants_database_id_fkey FOREIGN KEY (database_id) REFERENCES public.pg_databases(id);
-
-
---
--- Name: db_access_grants db_access_grants_granted_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.db_access_grants
-    ADD CONSTRAINT db_access_grants_granted_by_fkey FOREIGN KEY (granted_by) REFERENCES public.users(id);
-
-
---
--- Name: db_access_grants db_access_grants_revoked_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.db_access_grants
-    ADD CONSTRAINT db_access_grants_revoked_by_fkey FOREIGN KEY (revoked_by) REFERENCES public.users(id);
-
-
---
--- Name: db_access_grants db_access_grants_source_request_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.db_access_grants
-    ADD CONSTRAINT db_access_grants_source_request_id_fkey FOREIGN KEY (source_request_id) REFERENCES public.db_access_requests(id);
-
-
---
--- Name: db_access_grants db_access_grants_table_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.db_access_grants
-    ADD CONSTRAINT db_access_grants_table_id_fkey FOREIGN KEY (table_id) REFERENCES public.pg_tables_catalog(id);
-
-
---
--- Name: db_access_grants db_access_grants_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.db_access_grants
-    ADD CONSTRAINT db_access_grants_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
-
-
---
--- Name: db_access_requests db_access_requests_database_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.db_access_requests
-    ADD CONSTRAINT db_access_requests_database_id_fkey FOREIGN KEY (database_id) REFERENCES public.pg_databases(id);
-
-
---
--- Name: db_access_requests db_access_requests_reviewed_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.db_access_requests
-    ADD CONSTRAINT db_access_requests_reviewed_by_fkey FOREIGN KEY (reviewed_by) REFERENCES public.users(id);
-
-
---
--- Name: db_access_requests db_access_requests_table_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.db_access_requests
-    ADD CONSTRAINT db_access_requests_table_id_fkey FOREIGN KEY (table_id) REFERENCES public.pg_tables_catalog(id);
-
-
---
--- Name: db_access_requests db_access_requests_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.db_access_requests
-    ADD CONSTRAINT db_access_requests_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
-
-
---
 -- Name: password_reset_requests password_reset_requests_resolved_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -853,14 +638,6 @@ ALTER TABLE ONLY public.password_reset_requests
 
 ALTER TABLE ONLY public.password_reset_requests
     ADD CONSTRAINT password_reset_requests_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
-
-
---
--- Name: pg_tables_catalog pg_tables_catalog_database_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pg_tables_catalog
-    ADD CONSTRAINT pg_tables_catalog_database_id_fkey FOREIGN KEY (database_id) REFERENCES public.pg_databases(id) ON DELETE CASCADE;
 
 
 --

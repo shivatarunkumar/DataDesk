@@ -17,6 +17,7 @@ export function describeRule(rule: ColumnRule): string[] {
   if (hasMinLen && hasMaxLen) parts.push(`${rule.min_length}–${rule.max_length} characters`);
   else if (hasMinLen) parts.push(`at least ${rule.min_length} characters`);
   else if (hasMaxLen) parts.push(`up to ${rule.max_length} characters`);
+  if (rule.format) parts.push(`format ${rule.format}`);
   return parts;
 }
 
@@ -32,10 +33,13 @@ export function ContractSummary({
   contract,
   columns,
   version,
+  ordered = false,
 }: {
   contract: Contract | null | undefined;
   columns?: TableColumn[] | null;
   version?: number | null;
+  /** the file must have exactly these columns, in this order (File upload) */
+  ordered?: boolean;
 }) {
   const byName = new Map((contract?.columns ?? []).map((c) => [c.name, c]));
   const rows: { name: string; type?: string; nullable?: boolean; rule?: ColumnRule }[] = columns?.length
@@ -50,20 +54,28 @@ export function ContractSummary({
         </h3>
         <span className="text-xs text-muted">
           {ruleCount(contract)} rule{ruleCount(contract) === 1 ? "" : "s"}
+          {contract?.min_rows ? ` · at least ${contract.min_rows.toLocaleString()} rows` : ""}
           {contract?.max_rows ? ` · up to ${contract.max_rows.toLocaleString()} rows per file` : ""}
         </span>
       </div>
+      {ordered && (
+        <p className="border-t border-line px-4 py-2 text-xs text-muted">
+          The file needs every column below, in this order, with a header row.
+        </p>
+      )}
       {rows.length === 0 ? (
         <p className="px-4 py-3 text-sm text-muted">No column rules: only the table&apos;s own schema is checked.</p>
       ) : (
         <div className="max-h-72 overflow-auto">
           <table className="w-full text-sm">
             <tbody>
-              {rows.map(({ name, type, nullable, rule }) => {
+              {rows.map(({ name, type, nullable, rule }, i) => {
                 const parts = rule ? describeRule(rule) : [];
+                const warning = rule?.severity === "warning";
                 return (
                   <tr key={name} className="border-t border-line align-top first:border-t-0">
                     <td className="w-1/3 px-4 py-2">
+                      {ordered && <span className="mr-1.5 text-xs text-muted tabular">{i + 1}.</span>}
                       <span className="font-medium">{name}</span>
                       {type && (
                         <span className="block text-xs text-muted">
@@ -76,10 +88,16 @@ export function ContractSummary({
                       {parts.length ? (
                         <span className="flex flex-wrap gap-1">
                           {parts.map((p) => (
-                            <span key={p} className="rounded-full bg-brand/10 px-2 py-0.5 text-xs font-medium text-brand">
+                            <span
+                              key={p}
+                              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                                warning ? "bg-warn/15 text-warn" : "bg-brand/10 text-brand"
+                              }`}
+                            >
                               {p}
                             </span>
                           ))}
+                          {warning && <span className="text-xs text-warn">warning only</span>}
                         </span>
                       ) : (
                         <span className="text-xs text-muted">—</span>

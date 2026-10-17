@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -10,6 +11,7 @@ from app.core.config import get_settings
 from app.core.db import get_engine
 from app.core.logging import configure_logging
 from app.core.middleware import RequestLogMiddleware
+from app.services import file_upload
 from app.services.errors import ServiceError
 
 log = logging.getLogger("datadesk.startup")
@@ -25,7 +27,13 @@ async def lifespan(app: FastAPI):
         settings.gcs_bucket or "-",
         settings.bq_project if settings.bq_enabled else "off",
     )
+    # File upload: save Cloud Run's outcomes as they happen, not only when someone looks
+    poller = None
+    if settings.file_upload_enabled and settings.file_upload_poll_seconds > 0:
+        poller = asyncio.create_task(file_upload.poll_forever(settings))
     yield
+    if poller:
+        poller.cancel()
     log.info("DataDesk API stopping")
     await get_engine().dispose()
 

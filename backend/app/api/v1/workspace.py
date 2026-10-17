@@ -16,7 +16,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.storage import get_storage
 from app.api.deps import current_user
-from app.api.v1.requests import request_out
 from app.core.config import Settings, get_settings
 from app.core.db import get_session
 from app.models.user import User
@@ -28,14 +27,10 @@ from app.schemas.workspace import (
     FolderCreate,
     FolderOut,
     SaveContentIn,
-    TargetTable,
     TransferIn,
     TransferOut,
-    UploadRequestCreate,
-    UploadRequestOut,
 )
 from app.services import file_parser, transfer
-from app.services import requests as requests_svc
 from app.services import workspace as ws
 
 log = logging.getLogger("datadesk.workspace")
@@ -199,7 +194,7 @@ async def download_file(
 
 
 # ------------------------------------------------------------------ move and copy
-async def _drop_objects(paths: list[str]) -> None:
+async def drop_objects(paths: list[str]) -> None:
     """Delete bucket objects: what a committed move left behind, or what a failed one wrote."""
     storage = get_storage()
     for path in paths:
@@ -219,9 +214,9 @@ async def move_items(
         await transfer.move(session, user, body, out)
         await session.commit()
     except Exception:
-        await _drop_objects(out.new_objects)  # nothing moved: the originals are untouched
+        await drop_objects(out.new_objects)  # nothing moved: the originals are untouched
         raise
-    await _drop_objects(out.stale_objects)
+    await drop_objects(out.stale_objects)
     return TransferOut(files=out.files, folders=out.folders, renamed=out.renamed)
 
 
@@ -235,55 +230,6 @@ async def copy_items(
         await transfer.copy(session, user, body, out)
         await session.commit()
     except Exception:
-        await _drop_objects(out.new_objects)
+        await drop_objects(out.new_objects)
         raise
     return TransferOut(files=out.files, folders=out.folders, renamed=out.renamed)
-
-
-# ------------------------------------------------------------------ loads into tables
-@router.get("/targets", response_model=list[TargetTable])
-async def list_targets(user: User = Depends(current_user), session: AsyncSession = Depends(get_session)):
-    return await ws.allowed_targets(session, user.id, is_admin=user.role == "admin")
-
-
-@router.post("/upload-requests", response_model=UploadRequestOut)
-async def create_upload_request(
-    body: UploadRequestCreate,
-    response: Response,
-    user: User = Depends(current_user),
-    session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings),
-):
-    """Validate the file against the table. If it passes, file a request for an admin
-    (201); if not, return the report and file nothing (422 with status "failed")."""
-    request, file, report, target = await ws.create_upload_request(session, settings, user, body)
-    if request is None:
-        response.status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
-        return UploadRequestOut(
-            file_id=file.id,
-            file_name=file.original_name,
-            file_version=file.current_version,
-            target_type=target.target_type,
-            target_database=target.database,
-            target_schema=target.schema_name,
-            target_table=target.table,
-            write_mode=body.write_mode,
-            key_columns=body.key_columns,
-            justification=body.justification,
-            validation_status="failed",
-            validation_report=report,
-            status="failed",
-            target_id=target.target_id,
-            target_label=target.label if target.target_id else None,
-            contract_version=target.contract_version,
-        )
-    await session.commit()
-    response.status_code = status.HTTP_201_CREATED
-    return request_out(await requests_svc.get_request(session, request.id), user)
-
-
-@router.get("/upload-requests", response_model=list[UploadRequestOut])
-async def my_upload_requests(
-    user: User = Depends(current_user), session: AsyncSession = Depends(get_session)
-):
-    return [request_out(row, user) for row in await requests_svc.find_requests(session, user_id=user.id)]

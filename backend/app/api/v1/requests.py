@@ -17,6 +17,7 @@ from app.api.deps import current_user
 from app.core.db import get_session
 from app.models.user import User
 from app.schemas.workspace import UploadRequestOut
+from app.services import file_upload
 from app.services import requests as svc
 
 router = APIRouter(prefix="/requests", tags=["requests"])
@@ -34,7 +35,6 @@ def request_out(row: svc.RequestRow, viewer: User | None = None) -> UploadReques
         file_version=r.file_version,
         target_type=r.target_type,
         target_database=r.target_database,
-        target_schema=r.target_schema,
         target_table=r.target_table,
         write_mode=r.write_mode,
         key_columns=r.key_columns,
@@ -58,6 +58,12 @@ def request_out(row: svc.RequestRow, viewer: User | None = None) -> UploadReques
         is_mine=mine,
         origin=r.origin,
         change_summary=r.change_summary,
+        file_date=r.file_date,
+        landing_name=r.landing_name,
+        landing_uri=r.landing_uri,
+        landed_at=r.landed_at,
+        pipeline=file_upload.visible_pipeline(r.pipeline, full=full),
+        pipeline_checked_at=r.pipeline_checked_at,
     )
 
 

@@ -4,8 +4,9 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { type ReactNode, useEffect, useState } from "react";
 import { api, errorText } from "@/lib/api";
-import { TARGET_LABELS, dateTime, describeResult, timeAgo } from "@/lib/format";
+import { dateTime, describeResult, timeAgo, writeModeLabel } from "@/lib/format";
 import type { UploadRequest } from "@/lib/types";
+import { DeleteRequestButton } from "./DeleteRequest";
 import { ChevronRightIcon, SpinnerIcon } from "./icons";
 import { LoadFlowCompact, stagesFor, studioChanges } from "./LoadFlow";
 import { Alert, EmptyState, StatusPill } from "./ui";
@@ -13,13 +14,14 @@ import { Alert, EmptyState, StatusPill } from "./ui";
 const STATUS_FILTERS = [
   { value: "", label: "Any status" },
   { value: "pending", label: "Pending" },
+  { value: "reviewed", label: "Decided (history)" },
   { value: "completed", label: "Completed" },
   { value: "rejected", label: "Rejected" },
   { value: "failed", label: "Failed" },
 ];
 
 /** The requests page: yours, or everyone's (so nobody files a load that is already waiting). */
-export function RequestsBrowser() {
+export function RequestsBrowser({ isAdmin = false }: { isAdmin?: boolean }) {
   const router = useRouter();
   const params = useSearchParams();
   const scope = params.get("scope") === "all" ? "all" : "mine";
@@ -71,10 +73,12 @@ export function RequestsBrowser() {
       </div>
       {scope === "all" && (
         <p className="mb-3 text-sm text-muted">
-          Every load anyone has asked for. Check here before sending data to a table someone is already loading.
+          {status === "reviewed"
+            ? "Every load an admin has decided on: who asked, who decided and what happened."
+            : "Every load anyone has asked for. Check here before sending data to a table someone is already loading."}
         </p>
       )}
-      <RequestList scope={scope} status={status} />
+      <RequestList scope={scope} status={status} isAdmin={isAdmin} />
     </>
   );
 }
@@ -84,10 +88,13 @@ export function RequestList({
   fileId,
   scope = "mine",
   status = "",
+  isAdmin = false,
 }: {
   fileId?: string;
   scope?: "mine" | "all";
   status?: string;
+  /** admins get a Delete button on each request */
+  isAdmin?: boolean;
 }) {
   const [requests, setRequests] = useState<UploadRequest[] | null>(null);
   const [error, setError] = useState("");
@@ -110,7 +117,7 @@ export function RequestList({
     );
   if (requests.length === 0)
     return (
-      <EmptyState title={status ? `No ${status} requests` : "No load requests yet"}>
+      <EmptyState title={status ? `No ${status === "reviewed" ? "decided" : status} requests` : "No load requests yet"}>
         {scope === "mine" && (
           <>
             Open a file and use <span className="font-medium text-fg">Load to table</span> to ask for one.
@@ -122,7 +129,12 @@ export function RequestList({
   return (
     <ul className="flex max-w-5xl flex-col gap-2">
       {requests.map((r) => (
-        <RequestCard key={r.id} request={r} showFile={!fileId} />
+        <RequestCard
+          key={r.id}
+          request={r}
+          showFile={!fileId}
+          onDeleted={isAdmin ? () => setRequests((rows) => rows?.filter((x) => x.id !== r.id) ?? null) : undefined}
+        />
       ))}
     </ul>
   );
@@ -134,7 +146,7 @@ export function People({ r }: { r: UploadRequest }) {
     r.status === "pending"
       ? "waiting for an admin"
       : r.reviewed_by_name
-        ? `${r.status === "rejected" ? "rejected" : "approved"} by ${r.reviewed_by_name} ${timeAgo(r.reviewed_at)}`
+        ? `${r.status === "rejected" ? "rejected" : "approved"} by ${r.reviewed_by_name} ${timeAgo(r.reviewed_at)} (${dateTime(r.reviewed_at)})`
         : r.status;
   return (
     <>
@@ -148,68 +160,87 @@ export function RequestCard({
   request: r,
   showFile = true,
   children,
+  onDeleted,
 }: {
   request: UploadRequest;
   showFile?: boolean;
   children?: ReactNode;
+  /** set (admins only): a Delete button, and what to do once it's gone */
+  onDeleted?: () => void;
 }) {
   const outcome = describeResult(r.result);
   const target = r.target_label ?? `${r.target_database}.${r.target_table}`;
   return (
     <li className="rounded-xl border border-line transition hover:border-brand/40">
-      <Link href={`/requests/${r.id}`} className="block p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="font-medium">
-              {showFile && (
-                <>
-                  {r.origin === "studio" ? (
-                    <>
-                      Data Studio <span className="text-muted">({studioChanges(r.change_summary)})</span>
-                    </>
-                  ) : (
-                    <>
-                      {r.file_name ?? <span className="text-muted">deleted file</span>}
-                      {r.file_version && <span className="text-muted"> v{r.file_version}</span>}
-                    </>
-                  )}
-                  <span className="text-muted"> → </span>
-                </>
-              )}
-              <span>{target}</span>
-              {r.target_label && (
-                <span className="text-xs font-normal text-muted">
-                  {" "}
-                  ({r.target_database}.{r.target_table})
-                </span>
-              )}
-            </p>
-            <p className="mt-0.5 text-xs text-muted">
-              {TARGET_LABELS[r.target_type] ?? r.target_type} ·{" "}
-              {r.write_mode === "upsert" ? `upsert on ${(r.key_columns ?? []).join(", ")}` : r.write_mode === "update" ? "edit in place" : "append"}
-              {r.contract_version ? ` · contract v${r.contract_version}` : ""} · {dateTime(r.created_at)}
-            </p>
-            <p className="mt-1 text-xs text-muted">
-              <People r={r} />
-            </p>
-            <div className="mt-2.5">
-              <LoadFlowCompact stages={stagesFor(r)} />
+      <div className="flex items-start">
+        <Link href={`/requests/${r.id}`} className="block min-w-0 flex-1 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="font-medium">
+                {showFile && (
+                  <>
+                    {r.origin === "studio" ? (
+                      <>
+                        Data Studio <span className="text-muted">({studioChanges(r.change_summary)})</span>
+                      </>
+                    ) : (
+                      <>
+                        {r.file_name ?? <span className="text-muted">deleted file</span>}
+                        {r.file_version && <span className="text-muted"> v{r.file_version}</span>}
+                        {r.origin === "pipeline" && r.landing_name && r.landing_name !== r.file_name && (
+                          <span className="text-xs font-normal text-muted"> (as {r.landing_name})</span>
+                        )}
+                      </>
+                    )}
+                    <span className="text-muted"> → </span>
+                  </>
+                )}
+                <span>{target}</span>
+                {r.target_label && (
+                  <span className="text-xs font-normal text-muted">
+                    {" "}
+                    ({r.target_database}.{r.target_table})
+                  </span>
+                )}
+              </p>
+              <p className="mt-0.5 text-xs text-muted">
+                BigQuery ·{" "}
+                {r.origin === "pipeline" ? "Cloud Run · " : ""}
+                {writeModeLabel(r.write_mode, r.key_columns)}
+                {r.contract_version ? ` · contract v${r.contract_version}` : ""} · {dateTime(r.created_at)}
+              </p>
+              <p className="mt-1 text-xs text-muted">
+                <People r={r} />
+              </p>
+              <div className="mt-2.5">
+                <LoadFlowCompact stages={stagesFor(r)} />
+              </div>
             </div>
+            <span className="flex items-center gap-2">
+              <StatusPill status={r.origin === "pipeline" && r.status === "approved" && r.landing_uri ? "processing" : r.status} />
+              <ChevronRightIcon width={18} height={18} className="text-muted" />
+            </span>
           </div>
-          <span className="flex items-center gap-2">
-            <StatusPill status={r.status} />
-            <ChevronRightIcon width={18} height={18} className="text-muted" />
-          </span>
-        </div>
 
-        {r.justification && <p className="mt-2 text-sm italic text-muted">“{r.justification}”</p>}
-        {outcome && <p className={`mt-2 text-sm ${r.result?.error ? "text-bad" : "text-ok"}`}>{outcome}</p>}
-        {r.review_note && (
-          <p className="mt-2 text-sm">
-            <span className="font-medium">Admin note:</span> {r.review_note}
-          </p>
+          {r.justification && <p className="mt-2 text-sm italic text-muted">“{r.justification}”</p>}
+          {r.origin === "pipeline" && r.status === "approved" && r.pipeline?.message ? (
+            <p className={`mt-2 text-sm ${r.pipeline.state === "not_picked_up" ? "text-warn" : "text-muted"}`}>{r.pipeline.message}</p>
+          ) : (
+            outcome && <p className={`mt-2 text-sm ${r.result?.error ? "text-bad" : "text-ok"}`}>{outcome}</p>
+          )}
+          {r.review_note && (
+            <p className="mt-2 text-sm">
+              <span className="font-medium">Admin note:</span> {r.review_note}
+            </p>
+          )}
+        </Link>
+        {/* admins: Delete sits in the top row, beside the status (outside the link) */}
+        {onDeleted && (
+          <span className="shrink-0 pr-2 pt-3">
+            <DeleteRequestButton request={r} onDeleted={onDeleted} compact />
+          </span>
         )}
-      </Link>
+      </div>
       {children && <div className="border-t border-line px-4 pb-4">{children}</div>}
     </li>
   );

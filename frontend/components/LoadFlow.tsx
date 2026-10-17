@@ -64,8 +64,24 @@ export function studioChanges(summary: UploadRequest["change_summary"]): string 
   return parts.filter(Boolean).join(" · ") || "no changes";
 }
 
+function approvalStage(r: UploadRequest): Stage {
+  const who = (name: string | null) => name ?? "an admin";
+  return r.status === "pending"
+    ? { key: "approval", label: LABELS.approval, state: "current", lines: ["Waiting for an admin"] }
+    : r.status === "rejected"
+      ? {
+          key: "approval",
+          label: LABELS.approval,
+          state: "failed",
+          lines: [`Rejected by ${who(r.reviewed_by_name)}`, ...(r.review_note ? [`“${r.review_note}”`] : [])],
+          when: r.reviewed_at,
+        }
+      : { key: "approval", label: LABELS.approval, state: "done", lines: [`Approved by ${who(r.reviewed_by_name)}`], when: r.reviewed_at };
+}
+
 /** The stages of a request that exists. */
 export function stagesFor(r: UploadRequest): Stage[] {
+  if (r.origin === "pipeline") return pipelineStages(r);
   const report = r.validation_report;
   const who = (name: string | null) => name ?? "an admin";
   const approval: Stage =
@@ -120,6 +136,122 @@ export function stagesFor(r: UploadRequest): Stage[] {
       ? { key: "completed", label: LABELS.completed, state: "done", lines: ["Loading completed"], when: r.executed_at }
       : { key: "completed", label: LABELS.completed, state: "pending", lines: [r.status === "rejected" || r.status === "failed" ? "—" : "When the rows are in"] },
   ];
+}
+
+const bucketOf = (uri: string | null | undefined) => (uri ? uri.replace(/^gs:\/\//, "").split("/")[0] : "");
+
+/**
+ * A File upload request: checked here, approved, then with Cloud Run.
+ *
+ *   Initiated → Pre-check → Approval → Landing → Cloud Run → Checks → BigQuery load → Completed
+ *
+ * The Cloud Run stages come from file_audit (job_metadata and validation_metadata), read
+ * back whenever the request is refreshed.
+ */
+export function pipelineStages(r: UploadRequest): Stage[] {
+  const p = r.pipeline;
+  const job = p?.jobs?.length ? p.jobs[p.jobs.length - 1] : null;
+  const state = p?.state;
+  const landed = Boolean(r.landing_uri);
+  const attempt = job ? Math.max(job.attempt_number ?? 0, job.delivery_attempt ?? 0) || 1 : 0;
+  const pending = (key: string, label: string, line: string): Stage => ({ key, label, state: "pending", lines: [line] });
+  const stopped = r.status === "rejected" || (r.status === "failed" && !landed);
+
+  const initiated: Stage = {
+    key: "initiated",
+    label: LABELS.initiated,
+    state: "done",
+    lines: [`by ${r.is_mine ? "you" : (r.user_name ?? "someone")}`, `version ${r.file_version ?? "?"} of ${r.file_name ?? "the file"}`],
+    when: r.created_at,
+  };
+  const precheck: Stage =
+    r.status === "failed" && !landed && r.validation_status === "failed"
+      ? { key: "precheck", label: "Pre-check", state: "failed", lines: ["Failed again at approval", clip(String(r.result?.error ?? ""), 80)] }
+      : {
+          key: "precheck",
+          label: "Pre-check",
+          state: "done",
+          lines: [`as ${r.landing_name ?? "?"}`, r.contract_version ? `contract v${r.contract_version} passed` : "passed"],
+        };
+
+  const landing: Stage = landed
+    ? { key: "landing", label: "Landing", state: "done", lines: ["In the landing bucket", bucketOf(r.landing_uri)], when: r.landed_at }
+    : r.status === "failed" && r.validation_status !== "failed"
+      ? { key: "landing", label: "Landing", state: "failed", lines: [clip(String(r.result?.error ?? "Could not land the file"), 90)] }
+      : pending("landing", "Landing", stopped ? "Not sent" : "After approval");
+
+  let cloudRun: Stage = pending("cloudrun", "Cloud Run", stopped ? "—" : "When the file lands");
+  if (landed) {
+    if (!job)
+      cloudRun = {
+        key: "cloudrun",
+        label: "Cloud Run",
+        state: "current",
+        lines: state === "not_picked_up" ? ["Not picked up yet", "Check Pub/Sub and the DLQ"] : ["Waiting to be picked up"],
+      };
+    else if (state === "processing")
+      cloudRun = { key: "cloudrun", label: "Cloud Run", state: "current", lines: [`Picked up · attempt ${attempt}`, "Processing…"], when: job.start_time };
+    else if (state === "retrying")
+      cloudRun = {
+        key: "cloudrun",
+        label: "Cloud Run",
+        state: "current",
+        lines: [`Attempt ${attempt} hit a temporary error`, "Pub/Sub retries it"],
+        when: job.updated_at,
+      };
+    else if (state === "failed" && job.validation_status !== "PASSED" && job.validation_status !== "FAILED")
+      cloudRun = { key: "cloudrun", label: "Cloud Run", state: "failed", lines: [clip(p?.message ?? "Failed", 90)], when: job.end_time };
+    else
+      cloudRun = {
+        key: "cloudrun",
+        label: "Cloud Run",
+        state: "done",
+        lines: [`Picked up · attempt ${attempt}`, job.duration_seconds != null ? `${job.duration_seconds.toFixed(1)}s` : ""],
+        when: job.start_time,
+      };
+  }
+
+  const warned = (p?.checks ?? []).filter((c) => c.result === "WARN").length;
+  let checks: Stage = pending("checks", "Cloud Run checks", stopped ? "—" : "Contract and file checks");
+  if (job?.validation_status === "PASSED")
+    checks = {
+      key: "checks",
+      label: "Cloud Run checks",
+      state: "done",
+      lines: [`${job.validation_rules_executed ?? "All"} checks passed`, warned ? `${warned} with warnings` : ""],
+    };
+  else if (job?.validation_status === "FAILED") {
+    const failed = (p?.checks ?? []).flatMap((c) => (c.result === "FAIL" ? c.failed_checks : []));
+    checks = {
+      key: "checks",
+      label: "Cloud Run checks",
+      state: "failed",
+      lines: [`${job.validation_rules_failed ?? "Some"} of ${job.validation_rules_executed ?? "?"} failed`, clip(failed.slice(0, 3).join(", "), 70)],
+    };
+  } else if (state === "processing") checks = { key: "checks", label: "Cloud Run checks", state: "current", lines: ["Checking the file…"] };
+  else if (state === "rejected" && job) checks = { key: "checks", label: "Cloud Run checks", state: "failed", lines: [clip(p?.message ?? "Rejected", 90)] };
+
+  let load: Stage = pending("bqload", "BigQuery load", stopped ? "—" : r.write_mode === "overwrite" ? "Replaces the table" : "Appends the rows");
+  if (state === "succeeded" && job)
+    load = {
+      key: "bqload",
+      label: "BigQuery load",
+      state: "done",
+      lines: [`${(job.rows_loaded ?? 0).toLocaleString()} rows ${r.write_mode === "overwrite" ? "(table replaced)" : "appended"}`, job.target_table ?? ""],
+      when: job.end_time,
+    };
+  else if (state === "failed" && job?.validation_status === "PASSED")
+    load = { key: "bqload", label: "BigQuery load", state: "failed", lines: [clip(p?.message ?? "Load failed", 90)], when: job.end_time };
+  else if (state === "processing" && job?.validation_status === "PASSED")
+    load = { key: "bqload", label: "BigQuery load", state: "current", lines: ["Loading the rows…"] };
+  else if (state === "rejected" || (state === "failed" && job?.validation_status === "FAILED")) load = pending("bqload", "BigQuery load", "Not loaded");
+
+  const completed: Stage =
+    state === "succeeded"
+      ? { key: "completed", label: LABELS.completed, state: "done", lines: [job?.final_file_path ? "File archived" : "Done"], when: r.executed_at }
+      : pending("completed", LABELS.completed, r.status === "failed" || r.status === "rejected" ? "—" : "When the rows are in");
+
+  return [initiated, precheck, approvalStage(r), landing, cloudRun, checks, load, completed];
 }
 
 /** The stages while a file is being sent (no request yet), or after it failed the checks. */
@@ -240,7 +372,7 @@ function StageText({ stage }: { stage: Stage }) {
     <>
       <p className={`text-sm font-semibold ${tone}`}>{stage.label}</p>
       {stage.lines.filter(Boolean).map((line, i) => (
-        <p key={i} className={`text-xs ${stage.state === "failed" && i > 0 ? "text-bad" : "text-muted"} break-words`}>
+        <p key={i} className={`text-xs ${stage.state === "failed" && i > 0 ? "text-bad" : "text-muted"} [overflow-wrap:anywhere]`}>
           {line}
         </p>
       ))}
@@ -252,6 +384,8 @@ function StageText({ stage }: { stage: Stage }) {
 /** The full flow: across the page on wide screens, down it on narrow ones. */
 export function LoadFlow({ stages }: { stages: Stage[] }) {
   const summary = flowSummary(stages);
+  // eight stages (File upload) need narrower columns to fit across the page
+  const width = stages.length > 6 ? "w-24 lg:w-[6.5rem]" : "w-28 lg:w-32";
   return (
     <div role="group" aria-label={`Load progress: ${summary.text}`}>
       {/* wide: a row of stages joined by lines */}
@@ -259,9 +393,9 @@ export function LoadFlow({ stages }: { stages: Stage[] }) {
         {stages.map((stage, i) => (
           <Fragment key={stage.key}>
             {i > 0 && <Connector from={stages[i - 1]} to={stage} />}
-            <li className="flex w-28 shrink-0 flex-col items-center text-center lg:w-32">
+            <li className={`flex shrink-0 flex-col items-center text-center ${width}`}>
               <Node stage={stage} index={i} size="lg" />
-              <div className="mt-2 px-1">
+              <div className="mt-2 w-full min-w-0 px-1">
                 <StageText stage={stage} />
               </div>
             </li>

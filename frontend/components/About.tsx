@@ -14,6 +14,7 @@ const SECTIONS = [
   { id: "lifecycle", label: "The life of a request" },
   { id: "onboarding", label: "Onboarding & contracts" },
   { id: "studio", label: "Data Studio in depth" },
+  { id: "file-upload", label: "File upload (Cloud Run)" },
   { id: "roles", label: "Who can do what" },
   { id: "architecture", label: "Architecture" },
   { id: "storage", label: "Where things are stored" },
@@ -54,7 +55,7 @@ export function About() {
           <Section id="what" title="What DataDesk is">
             <p>
               Teams keep plenty of important data outside the systems it belongs in: customer lists, price changes, stock
-              counts, corrections to last month&apos;s figures. Getting it into a BigQuery or PostgreSQL table usually means
+              counts, corrections to last month&apos;s figures. Getting it into a BigQuery table usually means
               asking an engineer, or being given write access that is hard to audit. DataDesk sits in between.
             </p>
             <ul className="mt-3 list-disc space-y-1.5 pl-5">
@@ -64,6 +65,10 @@ export function About() {
               </li>
               <li>
                 <b>A Data Studio</b> for querying tables with SQL and making small corrections directly in the results.
+              </li>
+              <li>
+                <b>File upload</b>: send a CSV or Excel file to a table through the <b>Cloud Run file processor</b>, and
+                follow it from approval to the rows landing in BigQuery.
               </li>
               <li>
                 <b>Onboarded tables</b>, each with a <b>data contract</b>: the rules the data must follow before it can be
@@ -87,32 +92,39 @@ export function About() {
                 a spreadsheet grid. Every save is a new version you can view, download or restore.
               </Card>
               <Card title="Load to table" href="/">
-                From any file, pick an onboarded table, see its data contract, choose append or upsert, and send it. If
-                anything is wrong you get the full list of problems, row by row, before anything reaches an admin.
+                From any file&apos;s page: the same form and process as File upload, for that file. Pick the table, see its
+                contract and the name Cloud Run expects; problems are listed row by row before anything reaches an admin.
               </Card>
               <Card title="Data Studio" href="/studio">
-                Query onboarded tables with SQL, switch on Edit to change any cell or add rows, and submit the changes for
-                approval. For bigger changes, export the result to My files.
+                Browse datasets and tables like the BigQuery console, query them with SQL (Format tidies it), switch on Edit
+                to change cells or add rows, and submit the changes for approval. For bigger changes, export to My files.
+              </Card>
+              <Card title="File upload" href="/file-upload">
+                Upload a CSV or Excel file (or pick one from My files), choose the dataset and table, and see the file name
+                Cloud Run expects. After approval Cloud Run loads it; every step, and the reason if it fails, is on the
+                request.
               </Card>
               <Card title="Onboarding" href="/onboarding">
                 See which tables are open for data, with their contracts. Ask for a new one to be onboarded; admins can onboard
                 tables straight away.
               </Card>
               <Card title="Load requests" href="/uploads">
-                Everyone can see every request: who sent what, to which table, who approved it and how it went. That way the
-                same data isn&apos;t sent twice.
+                Everyone can see every request, of every kind: who sent what, to which table, who approved it and how it
+                went, so the same data isn&apos;t sent twice. The <b>Decided (history)</b> filter lists every decision.
               </Card>
               <Card title="Approvals (admins)" href="/admin">
-                Approve or reject loads and onboarding requests, approve new accounts, set temporary passwords, and see the
-                full load history.
+                Approve or reject loads, file uploads and onboarding requests, approve new accounts and set temporary
+                passwords. The list refreshes on its own; admins can also delete any request.
               </Card>
             </div>
           </Section>
 
           <Section id="flow" title="How data reaches a table">
             <p>
-              There are two ways in, and both end on the same path. A file you prepared in My files and changes you made in
-              Data Studio go through the same checks, the same approval and the same record.
+              There are two ways in, and both go through the same checks, the same approval and the same record.{" "}
+              <b>Files</b> (from File upload, or a file&apos;s Load to table tab) are handed to the Cloud Run file processor
+              to load; see <a href="#file-upload" className="text-brand hover:underline">File upload</a>.{" "}
+              <b>Data Studio edits</b> change rows in place, so DataDesk writes those itself.
             </p>
             <FlowDiagram />
             <ol className="mt-2 list-decimal space-y-2 pl-5">
@@ -142,7 +154,8 @@ export function About() {
 
           <Section id="lifecycle" title="The life of a request">
             <p>
-              Every request page, and every card in the lists, shows its progress as six stages. The stage in progress
+              Every request page, and every card in the lists, shows its progress as stages: six for Load to table and Data
+              Studio (below), eight for File upload, which adds Landing, Cloud Run, Cloud Run checks and BigQuery load. The stage in progress
               pulses, finished stages turn green, and a stage that fails turns red with its reason.
             </p>
             <div className="my-5 grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
@@ -168,9 +181,13 @@ export function About() {
             <p>Behind the stages, a request has one of five statuses:</p>
             <StatusDiagram />
             <p>
+              For a File upload, <b>approved</b> means the file is with Cloud Run; it becomes completed or failed when Cloud
+              Run finishes. Completed, failed and rejected are final: nothing moves a request back.
+            </p>
+            <p className="mt-2">
               A request that fails at approval stays <b>failed</b> with its reason, and nothing from it is kept half-written.
-              Postgres loads run in a single transaction. BigQuery appends are single load jobs, and upserts and Data Studio
-              edits run as one MERGE or one transaction. To try again, fix the data and send a new request.
+              BigQuery appends are single load jobs, and upserts and Data Studio edits run as one MERGE or one
+              transaction. To try again, fix the data and send a new request.
             </p>
           </Section>
 
@@ -184,19 +201,13 @@ export function About() {
             <p>
               Before a table can be onboarded, DataDesk proves it can work with the table <i>as itself</i>:
             </p>
-            <ul className="mt-2 list-disc space-y-1 pl-5">
-              <li>
-                <b>BigQuery:</b> the dataset and table are visible, the account holds read and write permissions, it can run
-                query and load jobs, and, for upsert, it can create the temporary staging table an upsert uses.
-              </li>
-              <li>
-                <b>PostgreSQL:</b> the login can use the schema and has SELECT and INSERT (and UPDATE for upsert). For
-                upsert, a unique index must cover exactly the key columns.
-              </li>
-            </ul>
             <p className="mt-2">
-              Any check that fails names the grant that fixes it. For Postgres, the page gives the exact <code>GRANT</code>{" "}
-              statement to copy. A table can&apos;t be onboarded until every check passes, and the API enforces this, not
+              The dataset and table are visible, the account holds read and write permissions, it can run query and load
+              jobs, and, for upsert, it can create the temporary staging table an upsert uses. With File upload on, it can
+              also write to Cloud Run&apos;s config and landing buckets and read its audit tables.
+            </p>
+            <p className="mt-2">
+              Any check that fails names the role that fixes it. A table can&apos;t be onboarded until every check passes, and the API enforces this, not
               only the page.
             </p>
 
@@ -212,7 +223,9 @@ export function About() {
                     ["Pattern", "The value must match a regular expression, e.g. an email or a product code."],
                     ["Range", "A number between a minimum and a maximum (0 is a valid limit)."],
                     ["Length", "Text between a minimum and a maximum number of characters."],
-                    ["Max rows", "The most rows one load may carry."],
+                    ["Date format", "For dates and timestamps not written as ISO (2026-10-17), e.g. %d/%m/%Y."],
+                    ["If it fails", "Stop the file (the default), or Warn only: failures are shown but the file goes through."],
+                    ["Fewest / most rows", "The fewest and the most rows one load may carry."],
                     ["Note", "Guidance shown to people preparing data for the table."],
                   ].map(([rule, text]) => (
                     <tr key={rule} className="border-t border-line first:border-t-0">
@@ -227,6 +240,12 @@ export function About() {
               Every change to a contract makes a new <b>version</b>. A request records the version it passed, and approval
               checks against the current one.
             </p>
+            <p className="mt-2">
+              <b>One contract for both paths.</b> When an admin turns on <b>File upload (Cloud Run)</b> for a table, it also
+              sets the file name prefix, CSV and/or Excel, and append or overwrite. DataDesk then publishes the same contract
+              to Cloud Run&apos;s config bucket whenever it changes, so DataDesk and Cloud Run always check the same rules.
+              When Cloud Run already had a contract for the table, onboarding starts from its rules.
+            </p>
 
             <h3 className="mt-6 font-semibold">Write modes</h3>
             <ul className="mt-2 list-disc space-y-1.5 pl-5">
@@ -235,12 +254,14 @@ export function About() {
               </li>
               <li>
                 <b>Upsert:</b> rows are matched on the key the admin chose when onboarding. A matching row is updated, and
-                any other row is inserted. BigQuery does this through a temporary staging table and one MERGE; Postgres uses{" "}
-                <code>INSERT … ON CONFLICT … DO UPDATE</code>.
+                any other row is inserted. BigQuery does this through a temporary staging table and one MERGE.
               </li>
               <li>
                 <b>Edit in place</b> (Data Studio only, on tables that allow upsert): the changed rows are updated where they
                 are. See the next section.
+              </li>
+              <li>
+                <b>Overwrite</b> (File upload only, when the admin chose it): the file replaces every row of the table.
               </li>
             </ul>
             <p className="mt-2">
@@ -253,20 +274,20 @@ export function About() {
             <StudioDiagram />
             <h3 className="mt-4 font-semibold">Querying: read-only, always</h3>
             <ul className="mt-2 list-disc space-y-1.5 pl-5">
-              <li>Clicking a table writes a starting query; you change it and press Run (or ⌘/Ctrl + Enter).</li>
+              <li>
+                The left panel lists datasets and their tables, like the BigQuery console. Clicking a table writes a starting
+                query; you change it and press Run (or ⌘/Ctrl + Enter). <b>Format</b> (⌘/Ctrl + Shift + F) lays the query out
+                one clause per line.
+              </li>
               <li>
                 Only one <code>SELECT</code> (or <code>WITH … SELECT</code>) runs at a time, and only over onboarded tables.
                 Anything else is refused before it reaches the database.
               </li>
               <li>
-                <b>PostgreSQL</b> runs the query in a read-only transaction with a 30-second timeout. First, the query plan is
-                checked for any table that isn&apos;t onboarded.
-              </li>
-              <li>
                 <b>BigQuery</b> dry-runs the query first to learn its statement type, the tables it reads and how much it
                 would scan. It refuses anything over 1 GB.
               </li>
-              <li>Up to 1,000 rows are shown. DataDesk&apos;s own database is never offered.</li>
+              <li>Up to 1,000 rows are shown.</li>
             </ul>
 
             <h3 className="mt-6 font-semibold">Editing</h3>
@@ -309,6 +330,60 @@ export function About() {
             </Callout>
           </Section>
 
+          <Section id="file-upload" title="File upload (Cloud Run)">
+            <p>
+              File upload sends a file to BigQuery through the <b>Cloud Run file processor</b> instead of DataDesk loading
+              it: Cloud Storage landing bucket → Pub/Sub → Cloud Run → BigQuery. Cloud Run records every attempt in{" "}
+              <code>file_audit.job_metadata</code> and every check in <code>file_audit.validation_metadata</code>, and
+              DataDesk reads those back to show what happened.
+            </p>
+            <FileUploadDiagram />
+            <ol className="mt-2 list-decimal space-y-2 pl-5">
+              <li>
+                <b>Send.</b> Upload a CSV or Excel file (it is saved in <b>My files › File uploads</b>) or pick one from My
+                files, grouped by folder, then choose the dataset and table. Only tables with File upload turned on are
+                listed.
+              </li>
+              <li>
+                <b>The file name.</b> Cloud Run finds the table by the file name, so the form shows what it expects, e.g.{" "}
+                <code>customer_YYYYMMDD.csv</code>. A file with another name keeps its own name in My files and lands as{" "}
+                <code>prefix_date.ext</code>; the date comes from a date in its name, or today, and can be changed.
+              </li>
+              <li>
+                <b>Checked here first,</b> exactly as Cloud Run will: CSV or Excel, comma-separated, every column of the
+                table in order with a header row, the types, and every contract rule. Warn-only rules are shown but
+                don&apos;t stop the file. Only a passing file becomes a request.
+              </li>
+              <li>
+                <b>Approve.</b> An admin approves it in Approvals. It is checked again against the current contract, then
+                copied to the landing bucket, and your copy moves to <b>My files › File uploads › Archive</b> so sent files
+                don&apos;t pile up. Approval waits about five minutes after a contract change, because Cloud Run
+                caches contracts for that long.
+              </li>
+              <li>
+                <b>Follow it.</b> The request moves through Landing, Cloud Run (picked up, which attempt), Cloud Run checks
+                and BigQuery load. If it fails you see Cloud Run&apos;s reason and each failed check with example rows (only
+                you and admins see the values). If nothing picks the file up within five minutes, it says so.
+              </li>
+            </ol>
+            <h3 className="mt-6 font-semibold">DataDesk keeps the record</h3>
+            <ul className="mt-2 list-disc space-y-1.5 pl-5">
+              <li>
+                The API checks Cloud Run&apos;s progress every 15 seconds for requests still with it, and saves each step in
+                DataDesk&apos;s own database, whether or not anyone is looking. The request page also refreshes every few
+                seconds and has a <b>Refresh status</b> button.
+              </li>
+              <li>
+                Once a request is completed or failed it is final: cleaning up <code>file_audit</code> or the table later
+                doesn&apos;t change it, and attempts seen once are kept.
+              </li>
+              <li>
+                A completed request offers <b>Check the data</b>: Data Studio opens with a query for the rows that load added
+                (Cloud Run tags each row with <code>_job_id</code>), ready for you to run.
+              </li>
+            </ul>
+          </Section>
+
           <Section id="roles" title="Who can do what">
             <div className="overflow-hidden rounded-xl border border-line">
               <table className="w-full text-sm">
@@ -324,7 +399,7 @@ export function About() {
                     [
                       ["Upload, edit, version and export your own files", true, true],
                       ["Query onboarded tables in Data Studio", true, true],
-                      ["Send data for approval (files or Data Studio edits)", true, true],
+                      ["Send data for approval (files, Data Studio edits, File upload)", true, true],
                       ["See every load request: who, what, where, the outcome", true, true],
                       ["See the row-level validation errors of a request", "own", true],
                       ["See onboarded tables and their contracts", true, true],
@@ -332,6 +407,7 @@ export function About() {
                       ["Onboard a table straight away, change contracts, pause tables", false, true],
                       ["Approve or reject loads and onboarding requests", false, true],
                       ["Approve accounts, set temporary passwords, suspend people", false, true],
+                      ["Delete any request", false, true],
                     ] as [string, boolean | string, boolean][]
                   ).map(([what, everyone, admins]) => (
                     <tr key={what} className="border-t border-line">
@@ -368,7 +444,7 @@ export function About() {
               </li>
               <li>
                 <b>Adapters</b> (<code>app/adapters</code>) are the only code that talks to the outside world: Cloud Storage,
-                BigQuery, the target Postgres server, and Google Cloud credentials.
+                BigQuery, the Cloud Run file processor&apos;s buckets and audit tables, and Google Cloud credentials.
               </li>
               <li>
                 <b>Models and schemas</b>: SQLAlchemy models for DataDesk&apos;s own tables, and Pydantic shapes for what goes
@@ -404,16 +480,18 @@ export function About() {
               </li>
               <li>
                 <b>upload_targets</b>: onboarded tables with their contract (JSON) and its version, write modes, upsert key,
-                a snapshot of the schema, and the onboarding request and review.
+                a snapshot of the schema, the onboarding request and review, and where the contract was last published for
+                Cloud Run.
               </li>
               <li>
                 <b>upload_requests</b>: each load. It records the file and version, the target, the write mode, the validation
                 report, the status and who decided, the result, and, for Data Studio, the change summary (every cell before and
-                after).
+                after). For a File upload it also keeps the name it landed under, where and when it landed, and every Cloud
+                Run attempt and check read back.
               </li>
             </ul>
             <p className="mt-2">
-              The schema is built only by versioned migrations (<code>V001</code> … <code>V010</code>). Each one is applied
+              The schema is built only by versioned migrations (<code>V001</code> … <code>V014</code>). Each one is applied
               once, recorded with a checksum, and never edited afterwards; a change is always a new migration.
             </p>
           </Section>
@@ -429,10 +507,8 @@ export function About() {
                 <b>Sessions:</b> a signed token in an httpOnly cookie (scripts can&apos;t read it), valid for 12 hours.
               </li>
               <li>
-                <b>DataDesk writes as itself, never as you.</b> Postgres targets are written by the{" "}
-                <code>datadesk_loader</code> login, which has no superuser rights and only the grants each onboarded table
-                needs. BigQuery and Cloud Storage are reached as DataDesk&apos;s own service account (impersonated, so no key
-                file). Test access reports which identity it checked as.
+                <b>DataDesk writes as itself, never as you.</b> BigQuery and Cloud Storage are reached as DataDesk&apos;s own
+                service account (impersonated, so no key file). Test access reports which identity it checked as.
               </li>
               <li>
                 <b>Least privilege by design:</b> Data Studio queries are read-only and limited to onboarded tables. All SQL
@@ -449,8 +525,8 @@ export function About() {
           <Section id="engineering" title="For engineers">
             <div className="grid gap-3 sm:grid-cols-2">
               <Card title="Stack">
-                FastAPI · SQLAlchemy (async, asyncpg) · Pydantic · Next.js · React · Tailwind · PostgreSQL · BigQuery · Cloud
-                Storage.
+                FastAPI · SQLAlchemy (async, asyncpg) · Pydantic · Next.js · React · Tailwind · PostgreSQL (DataDesk&apos;s own
+                data) · BigQuery · Cloud Storage · Cloud Run (File upload).
               </Card>
               <Card title="Ports">
                 API on <code>8001</code>, web app on <code>3001</code>. The web app forwards <code>/api</code> to the API.
@@ -458,18 +534,18 @@ export function About() {
             </div>
             <h3 className="mt-6 font-semibold">Repository</h3>
             <pre className="mt-2 overflow-x-auto rounded-xl border border-line bg-surface p-4 font-mono text-xs leading-5">{`backend/app/
-  api/v1/        routes: auth, workspace, studio, onboarding, requests, admin, health
-  services/      the rules: validators, workspace, onboarding, reviews, studio, studio_changes …
-  adapters/      storage (GCS), bigquery, target_postgres, gcp (identity)
+  api/v1/        routes: auth, workspace, studio, onboarding, requests, file_uploads, admin, health
+  services/      the rules: validators, workspace, onboarding, reviews, studio, file_upload …
+  adapters/      storage (GCS), bigquery, file_pipeline (Cloud Run), gcp (identity)
   models/ schemas/ core/
 backend/tests/   API and service tests
 database/
-  postgres/migrations/   V001 … V010, applied in order, checksummed
+  postgres/migrations/   V001 … V014, applied in order, checksummed
   postgres/schema/       generated snapshot of the schema
   scripts/               setup_db, migrate, seed, check_db …
 frontend/
-  app/           pages (files, studio, uploads, requests, onboarding, admin, about …)
-  components/    UI (FileBrowser, SpreadsheetEditor, DataStudio, LoadFlow …)
+  app/           pages (files, studio, file-upload, uploads, requests, onboarding, admin, about …)
+  components/    UI (FileBrowser, SpreadsheetEditor, DataStudio, FileUpload, LoadFlow …)
   lib/           api client, types, session, theme`}</pre>
             <h3 className="mt-6 font-semibold">Everyday commands</h3>
             <div className="mt-2 overflow-hidden rounded-xl border border-line">
@@ -477,9 +553,9 @@ frontend/
                 <tbody>
                   {[
                     ["make setup", "Install everything and create the database"],
-                    ["make db-init", "Create or upgrade the database: migrations, seed data, the loader login"],
+                    ["make db-init", "Create or upgrade the database: migrations and seed data"],
                     ["make api / make web", "Run the API and the web app with live reload"],
-                    ["make check-all", "Check the database, Cloud Storage and BigQuery connections"],
+                    ["make check-all", "Check the database, Cloud Storage, BigQuery and the Cloud Run buckets and audit tables"],
                     ["make admin EMAIL=…", "Make someone an admin"],
                     ["make test / make lint", "Tests and linters"],
                   ].map(([cmd, what]) => (
@@ -494,8 +570,7 @@ frontend/
             <h3 className="mt-6 font-semibold">Settings worth knowing (.env)</h3>
             <ul className="mt-2 list-disc space-y-1 pl-5 text-sm">
               <li>
-                <code>DATABASE_URL</code> (DataDesk&apos;s own database) and <code>TARGET_DATABASE_URL</code> (the Postgres
-                server loads go to, as <code>datadesk_loader</code>).
+                <code>DATABASE_URL</code> (DataDesk&apos;s own database).
               </li>
               <li>
                 <code>GCP_PROJECT_ID</code>, <code>GCP_SERVICE_ACCOUNT</code>, <code>GCS_BUCKET</code>,{" "}
@@ -507,8 +582,13 @@ frontend/
                 <code>STUDIO_MAX_BYTES_BILLED</code>.
               </li>
               <li>
-                <code>ENFORCE_APP_IDENTITY</code>: when true, Test access fails unless loads run as DataDesk&apos;s own
-                accounts (rather than a person&apos;s login or a superuser).
+                <code>FILE_UPLOAD_LANDING_BUCKET</code>, <code>FILE_UPLOAD_CONFIG_BUCKET</code> (File upload is off while
+                they are empty), <code>FILE_UPLOAD_AUDIT_DATASET</code>, <code>FILE_UPLOAD_CONTRACT_TTL_SECONDS</code>,{" "}
+                <code>FILE_UPLOAD_PICKUP_MINUTES</code>, <code>FILE_UPLOAD_POLL_SECONDS</code>.
+              </li>
+              <li>
+                <code>ENFORCE_APP_IDENTITY</code>: when true, Test access fails unless DataDesk runs as its own service
+                account rather than a person&apos;s gcloud login.
               </li>
             </ul>
           </Section>
@@ -516,12 +596,16 @@ frontend/
           <Section id="glossary" title="Glossary">
             <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-[10rem_1fr]">
               {[
-                ["Target", "A table DataDesk can write to: a BigQuery table or a PostgreSQL table."],
+                ["Target", "A BigQuery table DataDesk can write to."],
                 ["Onboarded", "A target that has been approved for loads, with its data contract."],
                 ["Data contract", "The rules a table's data must follow, per column. Versioned."],
                 ["Load request", "Data waiting for (or past) an admin's decision to write it to a table."],
                 ["Append / Upsert", "Insert every row / update rows that match the key and insert the rest."],
                 ["Edit in place", "Data Studio's mode: update the edited rows where they are."],
+                ["File upload", "Sending a file to a table through the Cloud Run file processor."],
+                ["Landing bucket", "Where approved File upload files are put; a new file there starts Cloud Run."],
+                ["Overwrite", "File upload's other load mode: the file replaces every row of the table."],
+                ["Warn only", "A contract rule whose failures are shown but don't stop the file."],
                 ["Version", "A saved state of a file. Restoring one makes it the newest version."],
                 ["Test access", "The check that DataDesk itself can read and write a table."],
               ].map(([term, text]) => (
@@ -648,10 +732,29 @@ function StatusDiagram() {
   );
 }
 
+function FileUploadDiagram() {
+  const id = "fu";
+  return (
+    <Diagram id={id} width={1000} height={190} title="File upload: checked and approved in DataDesk, loaded by Cloud Run, followed back in DataDesk.">
+      <Box x={20} y={30} w={150} h={70} title="Send" lines={["file + dataset.table"]} />
+      <Box x={200} y={30} w={150} h={70} title="Checks" lines={["name · header", "schema · contract"]} tone="warn" />
+      <Box x={380} y={30} w={150} h={70} title="Admin approves" lines={["checked again"]} />
+      <Box x={560} y={30} w={150} h={70} title="Landing bucket" lines={["prefix_YYYYMMDD.csv"]} tone="brand" />
+      <Box x={740} y={30} w={240} h={70} title="Cloud Run" lines={["checks · loads BigQuery", "archives the file"]} tone="accent" />
+      <Arrow id={id} d="M170 65 L200 65" />
+      <Arrow id={id} d="M350 65 L380 65" />
+      <Arrow id={id} d="M530 65 L560 65" />
+      <Arrow id={id} d="M710 65 L740 65" />
+      <Box x={560} y={125} w={420} h={50} title="DataDesk reads file_audit back" lines={["every 15 s · saved for good"]} />
+      <Arrow id={id} d="M860 100 L860 125" />
+    </Diagram>
+  );
+}
+
 function OnboardingDiagram() {
   const id = "onb";
   const steps: [string, string[], "base" | "warn" | "accent"][] = [
-    ["Pick a table", ["BigQuery dataset or", "Postgres database"], "base"],
+    ["Pick a table", ["a BigQuery dataset", "and table"], "base"],
     ["Test access", ["can DataDesk itself", "read and write it?"], "warn"],
     ["Write the contract", ["rules per column,", "write modes, key"], "base"],
     ["Admin review", ["approve or reject", "(admins: at once)"], "base"],
@@ -677,7 +780,7 @@ function StudioDiagram() {
   return (
     <Diagram id={id} width={1000} height={250} title="Data Studio: read-only queries; edits checked against the table, then written in one transaction.">
       <Box x={20} y={30} w={170} h={78} title="Query" lines={["SELECT over onboarded", "tables only"]} />
-      <Box x={20} y={150} w={170} h={78} title="Guard" lines={["Postgres: read-only, plan", "BigQuery: dry run, 1 GB"]} tone="warn" />
+      <Box x={20} y={150} w={170} h={78} title="Guard" lines={["BigQuery dry run:", "SELECT only, 1 GB cap"]} tone="warn" />
       <Arrow id={id} d="M105 108 L105 150" />
       <Box x={240} y={30} w={170} h={78} title="Edit" lines={["any cell, new rows", "up to 500 rows"]} tone="brand" />
       <Arrow id={id} d="M190 69 L240 69" />
@@ -705,17 +808,16 @@ function ArchitectureDiagram() {
       <Group x={230} y={30} w={330} h={400} label="DataDesk API · FastAPI · port 8001" tone="base" />
       <Box x={250} y={60} w={290} h={70} title="Routes (api/v1)" lines={["auth · workspace · studio · onboarding", "requests · admin · health"]} />
       <Box x={250} y={150} w={290} h={70} title="Services: the rules" lines={["validation · contracts · approvals", "onboarding · workspace · studio"]} tone="brand" />
-      <Box x={250} y={240} w={290} h={70} title="Adapters: the outside world" lines={["Cloud Storage · BigQuery", "target Postgres · GCP identity"]} />
+      <Box x={250} y={240} w={290} h={70} title="Adapters: the outside world" lines={["Cloud Storage · BigQuery", "Cloud Run pipeline · GCP identity"]} />
       <Box x={250} y={330} w={290} h={80} title="Core" lines={["settings · database · security", "logging with request ids"]} />
       <Arrow id={id} d="M395 130 L395 150" />
       <Arrow id={id} d="M395 220 L395 240" />
 
       <Box x={650} y={40} w={320} h={70} title="DataDesk database (PostgreSQL)" lines={["people · folders · files · versions", "onboarded tables · requests"]} />
       <Box x={650} y={130} w={320} h={70} title="Cloud Storage bucket" lines={["every version of every file"]} />
-      <Group x={630} y={225} w={360} h={205} label="Target tables · written only on approval" />
+      <Group x={630} y={225} w={360} h={155} label="Target tables · written only on approval" />
       <Box x={650} y={255} w={320} h={52} title="BigQuery" lines={["as DataDesk's service account"]} tone="accent" />
-      <Box x={650} y={317} w={320} h={52} title="PostgreSQL" lines={["as the datadesk_loader login"]} tone="accent" />
-      <Box x={650} y={379} w={320} h={42} title="Oracle · coming soon" tone="muted" dashed />
+      <Box x={650} y={317} w={320} h={52} title="Cloud Run file processor" lines={["File upload: landing bucket → BigQuery"]} tone="accent" />
 
       <Arrow id={id} d="M540 175 L570 175 L570 75 L650 75" label="metadata" lx={610} ly={67} />
       <Arrow id={id} d="M540 262 L595 262 L595 165 L650 165" label="file bytes" lx={622} ly={157} />

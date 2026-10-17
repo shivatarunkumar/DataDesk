@@ -10,33 +10,22 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import UTC, datetime
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.storage import StorageNotConfigured, get_storage
 from app.core.config import Settings
-from app.models.targets import (
-    BqAccessRequest,
-    BqTableCache,
-    DbAccessGrant,
-    PgDatabase,
-    PgTableCatalog,
-    UploadTarget,
-)
+from app.models.targets import UploadTarget
 from app.models.user import User
-from app.models.workspace import UploadRequest, WorkspaceFile, WorkspaceFileVersion, WorkspaceFolder
-from app.schemas.workspace import TargetTable, UploadRequestCreate
-from app.services import file_parser, loaders, validators
+from app.models.workspace import WorkspaceFile, WorkspaceFileVersion, WorkspaceFolder
+from app.schemas.workspace import TargetTable
+from app.services import file_parser, validators
 from app.services.errors import NotFound, ServiceError
 
 log = logging.getLogger("datadesk.workspace")
 
 DELIMITERS = {"comma": ",", "tab": "\t", "semicolon": ";", "pipe": "|"}
-ORACLE_PLACEHOLDER = TargetTable(
-    target_type="oracle", database=None, table="—", label="Oracle (coming soon)", enabled=False
-)
 
 
 # ------------------------------------------------------------------ storage
@@ -134,6 +123,19 @@ async def create_folder(
     await session.flush()
     log.info("created folder %s", path)
     return folder
+
+
+async def ensure_folder(session: AsyncSession, user_id: uuid.UUID, path: list[str]) -> WorkspaceFolder:
+    """The folder at this path in someone's files (e.g. ["File uploads", "Archive"]), made if missing."""
+    parent: WorkspaceFolder | None = None
+    for i, name in enumerate(path):
+        full = "/".join(path[: i + 1])
+        found = await session.scalar(
+            select(WorkspaceFolder).where(WorkspaceFolder.user_id == user_id, WorkspaceFolder.path == full)
+        )
+        parent = found or await create_folder(session, user_id, name, parent.id if parent else None)
+    assert parent is not None
+    return parent
 
 
 async def delete_folder(session: AsyncSession, user_id: uuid.UUID, folder_id: uuid.UUID) -> None:
@@ -373,28 +375,11 @@ async def list_versions(session: AsyncSession, file: WorkspaceFile) -> list[Work
 
 
 # ------------------------------------------------------------------ upload targets
-def _pg_target(db_name: str, table: str) -> TargetTable:
-    return TargetTable(
-        target_type="postgres",
-        database=db_name,
-        schema_name="public",
-        table=table,
-        label=f"{db_name}.{table}",
-    )
-
-
-def _bq_target(dataset: str, table: str) -> TargetTable:
-    return TargetTable(target_type="bigquery", database=dataset, table=table, label=f"{dataset}.{table}")
-
-
 def onboarded_option(target: UploadTarget) -> TargetTable:
     return TargetTable(
-        target_type=target.target_type,
         database=target.database_name,
-        schema_name=target.schema_name,
         table=target.table_name,
         label=target.display_name,
-        enabled=target.target_type != "oracle",
         target_id=target.id,
         description=target.description,
         write_modes=list(target.write_modes),
@@ -405,221 +390,8 @@ def onboarded_option(target: UploadTarget) -> TargetTable:
     )
 
 
-async def allowed_targets(session: AsyncSession, user_id: uuid.UUID, is_admin: bool) -> list[TargetTable]:
-    """Tables this person may load into.
-
-    Every active onboarded table is open to everyone: onboarding is the admin's decision
-    that people may send data there, and the contract plus the approval step guard it.
-    On top of those come the older per-person grants (the whole catalog for admins).
-    Oracle is always listed, disabled, until it is supported.
-    """
-    now = datetime.now(UTC)
-    targets: list[TargetTable] = [
-        onboarded_option(t)
-        for t in await session.scalars(
-            select(UploadTarget)
-            .where(UploadTarget.is_active.is_(True), UploadTarget.onboarding_status == "approved")
-            .order_by(UploadTarget.display_name)
-        )
-    ]
-    catalog = (
-        select(PgTableCatalog.table_name, PgDatabase.name)
-        .join(PgDatabase, PgTableCatalog.database_id == PgDatabase.id)
-        .where(PgTableCatalog.is_active.is_(True), PgDatabase.is_active.is_(True))
-        .order_by(PgDatabase.name, PgTableCatalog.table_name)
-    )
-
-    if is_admin:
-        for table, db_name in await session.execute(catalog):
-            targets.append(_pg_target(db_name, table))
-        for row in await session.scalars(
-            select(BqTableCache).order_by(BqTableCache.dataset_id, BqTableCache.id)
-        ):
-            targets.append(_bq_target(row.dataset_id, row.id))
-        return [*_dedupe(targets), ORACLE_PLACEHOLDER]
-
-    # Postgres: active grants, on a whole database or on single tables
-    grants = [
-        g
-        for g in await session.scalars(
-            select(DbAccessGrant).where(DbAccessGrant.user_id == user_id, DbAccessGrant.revoked_at.is_(None))
-        )
-        if g.expires_at is None or g.expires_at > now
-    ]
-    db_ids = {g.database_id for g in grants if g.scope_type == "database" and g.database_id}
-    table_ids = {g.table_id for g in grants if g.scope_type == "table" and g.table_id}
-    granted = []
-    if db_ids:
-        granted.append(PgTableCatalog.database_id.in_(db_ids))
-    if table_ids:
-        granted.append(PgTableCatalog.id.in_(table_ids))
-    if granted:
-        for table, db_name in await session.execute(catalog.where(or_(*granted))):
-            targets.append(_pg_target(db_name, table))
-
-    # BigQuery: approved, unexpired access requests
-    for req in await session.scalars(
-        select(BqAccessRequest).where(
-            BqAccessRequest.user_id == user_id, BqAccessRequest.status == "approved"
-        )
-    ):
-        if req.expires_at is not None and req.expires_at <= now:
-            continue
-        if req.scope_type == "table" and req.dataset_id and req.table_id:
-            targets.append(_bq_target(req.dataset_id, req.table_id))
-        elif req.scope_type == "dataset" and req.dataset_id:
-            for row in await session.scalars(
-                select(BqTableCache).where(BqTableCache.dataset_id == req.dataset_id)
-            ):
-                targets.append(_bq_target(req.dataset_id, row.id))
-
-    return [*_dedupe(targets), ORACLE_PLACEHOLDER]
-
-
-def _dedupe(targets: list[TargetTable]) -> list[TargetTable]:
-    """One entry per table; onboarded targets come first, so they win over grants."""
-    seen: set[tuple] = set()
-    unique = []
-    for t in targets:
-        key = (t.target_type, t.database, t.table)
-        if key not in seen:
-            seen.add(key)
-            unique.append(t)
-    return unique
-
-
-# ------------------------------------------------------------------ load requests
-async def resolve_target(
-    session: AsyncSession, user: User, body: UploadRequestCreate
-) -> tuple[TargetTable, UploadTarget | None]:
-    """Where the file goes: an onboarded target by id, or a granted table by name."""
-    if body.target_id:
-        target = await session.get(UploadTarget, body.target_id)
-        if target is None or not target.is_open:
-            raise ServiceError("That table is no longer open for loads.", status_code=404)
-        if target.target_type == "oracle":
-            raise ServiceError("Oracle support is coming soon.")
-        return onboarded_option(target), target
-
-    if not body.target_type or not body.table:
-        raise ServiceError("Choose a table to load into.", field="table")
-    if body.target_type == "oracle":
-        raise ServiceError("Oracle support is coming soon.")
-    allowed = await allowed_targets(session, user.id, is_admin=user.role == "admin")
-    match = next(
-        (
-            t
-            for t in allowed
-            if t.enabled
-            and t.target_type == body.target_type
-            and t.database == body.database
-            and t.table == body.table
-        ),
-        None,
-    )
-    if match is None:
-        log.info("load refused: %s has no access to %s.%s", user.username, body.database, body.table)
-        raise ServiceError(
-            f"You don't have access to load into {body.database}.{body.table}. Ask an admin to onboard it.",
-            status_code=403,
-        )
-    onboarded = await session.get(UploadTarget, match.target_id) if match.target_id else None
-    return match, onboarded
-
-
-def contract_rules(target_type: str, table: str, onboarded: UploadTarget | None) -> tuple[dict, int | None]:
+def contract_rules(table: str, onboarded: UploadTarget | None) -> tuple[dict, int | None]:
     """(rules by column, max_rows) from the onboarded contract, else a file in data-contracts/."""
     if onboarded is not None:
         return validators.rules_from_contract(onboarded.contract), onboarded.contract.get("max_rows")
-    return validators.load_rules(target_type, table), None
-
-
-async def create_upload_request(
-    session: AsyncSession, settings: Settings, user: User, body: UploadRequestCreate
-) -> tuple[UploadRequest | None, WorkspaceFile, dict, TargetTable]:
-    """Validate the file against the target's live schema and data contract and, if it
-    passes, file a request for an admin.
-
-    Returns (request, or None when validation failed; the file; the report; the target).
-    """
-    file = await owned_file(session, body.file_id, user.id)
-    target, onboarded = await resolve_target(session, user, body)
-
-    if body.write_mode not in target.write_modes:
-        raise ServiceError(f"{target.label} doesn't accept {body.write_mode} loads.", field="write_mode")
-    keys = [k.strip() for k in body.key_columns or [] if k.strip()]
-    if onboarded is not None and body.write_mode == "upsert":
-        keys = list(onboarded.key_columns)  # the admin fixed the key when onboarding
-    if body.write_mode == "upsert" and not keys:
-        raise ServiceError("Upsert needs at least one key column.", field="key_columns")
-
-    try:
-        target_cols = await loaders.target_columns(
-            target.target_type, target.database, target.schema_name, target.table
-        )
-    except Exception as exc:
-        raise ServiceError(f"Could not read the target table's schema: {exc}", status_code=502) from exc
-
-    parsed = await read_content(session, settings, file, None, None)
-    rules, max_rows = contract_rules(target.target_type, target.table, onboarded)
-    report = validators.validate(parsed, target_cols, body.write_mode, keys, rules, max_rows=max_rows)
-    report["contract_version"] = onboarded.contract_version if onboarded else None
-    report["contract_rules"] = len(rules)
-    # what the Validation stage shows: how the file was read
-    report["file"] = {
-        "format": file.format,
-        "delimiter": parsed.get("delimiter"),
-        "version": file.current_version,
-    }
-    if not report["passed"]:
-        log.info(
-            "validation failed for %s → %s.%s: %s",
-            file.original_name,
-            target.database,
-            target.table,
-            report["summary"],
-        )
-        return None, file, report, target
-
-    request = UploadRequest(
-        user_id=user.id,
-        file_id=file.id,
-        file_version=file.current_version,
-        target_type=target.target_type,
-        target_database=target.database,
-        target_schema=target.schema_name or ("public" if target.target_type == "postgres" else None),
-        target_table=target.table,
-        write_mode=body.write_mode,
-        key_columns=keys or None,
-        justification=(body.justification or "").strip() or None,
-        validation_status="passed",
-        validation_report=report,
-        status="pending",
-        target_id=onboarded.id if onboarded else None,
-        contract_version=onboarded.contract_version if onboarded else None,
-    )
-    session.add(request)
-    await session.flush()
-    log.info(
-        "load request filed: %s v%d → %s.%s (contract v%s)",
-        file.original_name,
-        file.current_version,
-        target.database,
-        target.table,
-        request.contract_version or "-",
-    )
-    return request, file, report, target
-
-
-async def my_upload_requests(
-    session: AsyncSession, user_id: uuid.UUID
-) -> list[tuple[UploadRequest, str | None, str | None]]:
-    """(request, file name, onboarded target's display name) newest first."""
-    rows = await session.execute(
-        select(UploadRequest, WorkspaceFile.original_name, UploadTarget.display_name)
-        .join(WorkspaceFile, WorkspaceFile.id == UploadRequest.file_id)
-        .outerjoin(UploadTarget, UploadTarget.id == UploadRequest.target_id)
-        .where(UploadRequest.user_id == user_id)
-        .order_by(UploadRequest.created_at.desc())
-    )
-    return [(req, name, label) for req, name, label in rows]
+    return validators.load_rules(table), None

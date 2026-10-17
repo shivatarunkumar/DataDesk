@@ -291,3 +291,22 @@ export const MoveIcon = (p: IconProps) => (
     <path d="M10 13h6m-2-2 2 2-2 2" />
   </Icon>
 );
+
+/** A BigQuery dataset, the way the BigQuery console draws one: a block of tiles. */
+export const DatasetIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="3.5" y="3.5" width="17" height="17" rx="2.5" />
+    <rect x="7" y="7" width="4" height="4" rx="0.6" fill="currentColor" stroke="none" />
+    <rect x="13" y="7" width="4" height="4" rx="0.6" fill="currentColor" stroke="none" />
+    <rect x="7" y="13" width="10" height="4" rx="0.6" fill="currentColor" stroke="none" />
+  </Icon>
+);
+
+/** A BigQuery table: a grid with a header row. */
+export const BqTableIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="3.5" y="4.5" width="17" height="15" rx="1.5" />
+    <path d="M3.5 9h17M3.5 14.25h17M9.5 9v10.5M15 9v10.5" />
+    <rect x="3.5" y="4.5" width="17" height="4.5" rx="1.5" fill="currentColor" stroke="none" opacity="0.25" />
+  </Icon>
+);

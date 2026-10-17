@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_admin
 from app.api.v1.requests import request_out
+from app.api.v1.workspace import drop_objects
 from app.core.config import Settings, get_settings
 from app.core.db import get_session
 from app.models.user import User
@@ -179,6 +180,8 @@ async def approve_upload_request(
     """Re-validate, then load. The response says whether it completed or failed."""
     request = await reviews.approve_upload(session, settings, admin, request_id)
     await session.commit()
+    # File upload moved the file to its archive folder: the old copies can go now
+    await drop_objects(getattr(request, "stale_objects", []))
     return request_out(await requests_svc.get_request(session, request.id), admin)
 
 
@@ -192,3 +195,14 @@ async def reject_upload_request(
     request = await reviews.reject_upload(session, admin, request_id, body.review_note if body else None)
     await session.commit()
     return request_out(await requests_svc.get_request(session, request.id), admin)
+
+
+@router.delete("/upload-requests/{request_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_upload_request(
+    request_id: uuid.UUID,
+    admin: User = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Delete a request of any kind and status (DataDesk's record only)."""
+    await reviews.delete_upload(session, admin, request_id)
+    await session.commit()

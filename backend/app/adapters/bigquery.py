@@ -50,7 +50,7 @@ def list_datasets() -> list[str]:
 def list_tables(dataset: str) -> list[dict]:
     client = get_client()
     return [
-        {"schema": None, "table": t.table_id, "kind": t.table_type}
+        {"table": t.table_id, "kind": t.table_type}
         for t in sorted(
             client.list_tables(f"{client.project}.{dataset}", timeout=15), key=lambda t: t.table_id
         )

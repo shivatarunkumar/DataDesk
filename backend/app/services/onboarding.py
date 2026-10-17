@@ -16,91 +16,76 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.adapters import bigquery, target_postgres
+from app.adapters import bigquery, file_pipeline
+from app.core.config import get_settings
 from app.models.targets import UploadTarget
 from app.models.user import User
 from app.models.workspace import UploadRequest
 from app.schemas.onboarding import Contract, TargetIn, TargetPatch
-from app.services import loaders
+from app.services import file_upload, loaders
 from app.services.errors import NotFound, ServiceError
 
 log = logging.getLogger("datadesk.onboarding")
 
-ORACLE_SOON = "Oracle support is coming soon."
-
 
 # ------------------------------------------------------------------ discovering sources
-async def list_databases(target_type: str) -> list[str]:
-    """BigQuery datasets, or databases on the target Postgres server."""
+async def list_datasets() -> list[str]:
     try:
-        if target_type == "bigquery":
-            return await asyncio.to_thread(bigquery.list_datasets)
-        if target_type == "postgres":
-            return await target_postgres.list_databases()
+        return await asyncio.to_thread(bigquery.list_datasets)
     except Exception as exc:
-        raise ServiceError(f"Could not list {target_type} databases: {exc}", status_code=502) from exc
-    raise ServiceError(ORACLE_SOON)
+        raise ServiceError(f"Could not list BigQuery datasets: {exc}", status_code=502) from exc
 
 
-async def list_tables(session: AsyncSession, target_type: str, database: str) -> list[dict]:
+async def list_tables(session: AsyncSession, dataset: str) -> list[dict]:
     try:
-        if target_type == "bigquery":
-            tables = await asyncio.to_thread(bigquery.list_tables, database)
-        elif target_type == "postgres":
-            tables = await target_postgres.list_tables(database)
-        else:
-            raise ServiceError(ORACLE_SOON)
-    except ServiceError:
-        raise
+        tables = await asyncio.to_thread(bigquery.list_tables, dataset)
     except Exception as exc:
-        raise ServiceError(f"Could not list tables in {database}: {exc}", status_code=502) from exc
+        raise ServiceError(f"Could not list tables in {dataset}: {exc}", status_code=502) from exc
 
     # mark the ones already onboarded, so the picker can say so
     onboarded = {
-        (t.schema_name, t.table_name): t.id
-        for t in await session.scalars(
-            select(UploadTarget).where(
-                UploadTarget.target_type == target_type, UploadTarget.database_name == database
-            )
-        )
+        t.table_name: t.id
+        for t in await session.scalars(select(UploadTarget).where(UploadTarget.database_name == dataset))
     }
-    return [
-        {**t, "schema_name": t["schema"], "onboarded_id": onboarded.get((t["schema"], t["table"]))}
-        for t in tables
-    ]
+    return [{**t, "onboarded_id": onboarded.get(t["table"])} for t in tables]
 
 
-async def table_schema(target_type: str, database: str, schema: str | None, table: str) -> list[dict]:
-    if target_type == "oracle":
-        raise ServiceError(ORACLE_SOON)
+async def table_schema(dataset: str, table: str) -> list[dict]:
     try:
-        return await loaders.target_columns(target_type, database, schema, table)
+        return await loaders.target_columns(dataset, table)
     except Exception as exc:
-        raise ServiceError(f"Could not read {database}.{table}: {exc}", status_code=502) from exc
+        raise ServiceError(f"Could not read {dataset}.{table}: {exc}", status_code=502) from exc
 
 
 async def check_access(
-    target_type: str,
-    database: str,
-    schema: str | None,
+    dataset: str,
     table: str,
     modes: list[str],
     keys: list[str],
     probe_writes: bool = True,
+    file_upload: bool = False,
 ) -> dict:
     """Can DataDesk, with its own credentials, do what these write modes need? Run before
-    onboarding, so a missing grant shows up now and not on the first approved load."""
-    if target_type == "oracle":
-        raise ServiceError(ORACLE_SOON)
-    if target_type == "bigquery":
-        checks = await asyncio.to_thread(bigquery.access_checks, database, table, modes, keys, probe_writes)
-    else:
-        checks = await target_postgres.access_checks(database, schema or "public", table, modes, keys)
+    onboarding, so a missing grant shows up now and not on the first approved load. With
+    file_upload, also what the File upload tab needs: the Cloud Run buckets and audit tables."""
+    checks = await asyncio.to_thread(bigquery.access_checks, dataset, table, modes, keys, probe_writes)
+    if file_upload:
+        if get_settings().file_upload_enabled:
+            checks += await asyncio.to_thread(file_pipeline.access_checks)
+        else:
+            checks.append(
+                {
+                    "name": "file upload",
+                    "ok": False,
+                    "detail": "File upload is switched off in this DataDesk",
+                    "hint": "set FILE_UPLOAD_LANDING_BUCKET and FILE_UPLOAD_CONFIG_BUCKET in .env, "
+                    "then restart the API",
+                }
+            )
     ok = all(c["ok"] for c in checks)
     log.info(
-        "access check %s %s.%s (%s): %s",
-        target_type,
-        database,
+        "access check %s.%s (%s): %s",
+        dataset,
         table,
         "+".join(modes),
         "ok" if ok else "failed: " + ", ".join(c["name"] for c in checks if not c["ok"]),
@@ -109,17 +94,18 @@ async def check_access(
 
 
 async def require_access(
-    target_type: str,
-    database: str,
-    schema: str | None,
+    dataset: str,
     table: str,
     modes: list[str],
     keys: list[str],
     probe_writes: bool,
+    file_upload: bool = False,
 ) -> None:
     """Refuse to onboard (or approve) a table DataDesk can't actually load into. Run on the
     server, so it holds however the request arrives."""
-    report = await check_access(target_type, database, schema, table, modes, keys, probe_writes=probe_writes)
+    report = await check_access(
+        dataset, table, modes, keys, probe_writes=probe_writes, file_upload=file_upload
+    )
     failed = [c for c in report["checks"] if not c["ok"]]
     if failed:
         listed = "; ".join(f"{c['name']}: {c['detail']}" for c in failed)
@@ -148,13 +134,23 @@ def _contract_json(contract: Contract) -> dict:
     """Store only the rules that say something, so an untouched column adds nothing."""
     columns = []
     for rule in contract.columns:
-        data = rule.model_dump(exclude_none=True)
-        if any(v not in (False, None, "", []) for k, v in data.items() if k != "name"):
-            columns.append({k: v for k, v in data.items() if v is not False})
+        data = rule.model_dump(exclude_none=True, exclude_defaults=True)
+        # a severity on its own changes nothing: it only says how the column's rules count
+        if any(v not in (False, None, "", []) for k, v in data.items() if k not in ("name", "severity")):
+            columns.append({"name": rule.name, **{k: v for k, v in data.items() if v is not False}})
     out: dict = {"columns": columns}
+    if contract.min_rows:
+        out["min_rows"] = contract.min_rows
     if contract.max_rows:
         out["max_rows"] = contract.max_rows
+    if contract.file_upload and (contract.file_upload.enabled or contract.file_upload.file_prefix):
+        out["file_upload"] = contract.file_upload.model_dump()
     return out
+
+
+def _file_upload_on(contract: Contract) -> bool:
+    """Whether this contract sends files through Cloud Run (the File upload tab)."""
+    return bool(contract.file_upload and contract.file_upload.enabled)
 
 
 async def list_targets(
@@ -213,9 +209,7 @@ async def create_target(session: AsyncSession, user: User, body: TargetIn) -> Up
 
     existing = await session.scalar(
         select(UploadTarget).where(
-            UploadTarget.target_type == body.target_type,
             UploadTarget.database_name == body.database_name,
-            func.coalesce(UploadTarget.schema_name, "") == (body.schema_name or ""),
             UploadTarget.table_name == body.table_name,
             UploadTarget.onboarding_status != "rejected",
         )
@@ -227,23 +221,21 @@ async def create_target(session: AsyncSession, user: User, body: TargetIn) -> Up
             )
         raise ServiceError("That table is already onboarded.", status_code=409)
 
-    columns = await table_schema(body.target_type, body.database_name, body.schema_name, body.table_name)
+    columns = await table_schema(body.database_name, body.table_name)
     _check_against_schema(columns, body.contract, body.key_columns)
     await require_access(
-        body.target_type,
         body.database_name,
-        body.schema_name,
         body.table_name,
         body.write_modes,
         body.key_columns,
         probe_writes=is_admin,
+        file_upload=_file_upload_on(body.contract),
     )
 
     now = datetime.now(UTC)
     target = UploadTarget(
-        target_type=body.target_type,
+        target_type="bigquery",
         database_name=body.database_name,
-        schema_name=body.schema_name,
         table_name=body.table_name,
         display_name=body.display_name.strip(),
         description=(body.description or "").strip() or None,
@@ -262,11 +254,11 @@ async def create_target(session: AsyncSession, user: User, body: TargetIn) -> Up
     )
     session.add(target)
     await session.flush()
+    await file_upload.publish_contract(get_settings(), target)
     log.info(
-        "%s %s %s %s with %d contract rule(s)",
+        "%s %s %s with %d contract rule(s)",
         user.username,
         "onboarded" if is_admin else "asked to onboard",
-        body.target_type,
         target.location,
         len(target.contract["columns"]),
     )
@@ -287,25 +279,29 @@ async def update_target(
             "Pick the key columns that identify a row, or don't allow upsert", field="key_columns"
         )
 
-    # upsert needs more rights than append: check again when what loads may do changes
+    # upsert needs more rights than append, and File upload needs the Cloud Run buckets:
+    # check again when what loads may do changes
     modes_now = list(dict.fromkeys(write_modes))
-    loads_changed = modes_now != list(target.write_modes) or key_columns != list(target.key_columns or [])
+    was_file_upload = bool((target.contract or {}).get("file_upload", {}).get("enabled"))
+    file_upload_now = _file_upload_on(body.contract) if body.contract is not None else was_file_upload
+    loads_changed = (
+        modes_now != list(target.write_modes)
+        or key_columns != list(target.key_columns or [])
+        or (file_upload_now and not was_file_upload)
+    )
     if loads_changed and target.onboarding_status != "rejected":
         await require_access(
-            target.target_type,
             target.database_name,
-            target.schema_name,
             target.table_name,
             modes_now,
             key_columns,
             probe_writes=user.role == "admin",
+            file_upload=file_upload_now,
         )
 
     if body.contract is not None or body.key_columns is not None:
         # check against the table as it is now, and keep the snapshot current
-        columns = await table_schema(
-            target.target_type, target.database_name, target.schema_name, target.table_name
-        )
+        columns = await table_schema(target.database_name, target.table_name)
         _check_against_schema(columns, body.contract or Contract.model_validate(target.contract), key_columns)
         target.schema_snapshot = columns
 
@@ -335,6 +331,8 @@ async def update_target(
         target.is_active = body.is_active
     target.updated_by = user.id
     await session.flush()
+    # Cloud Run's copy follows: rewritten when the contract changed, removed when paused
+    await file_upload.publish_contract(get_settings(), target)
     return target
 
 
@@ -350,19 +348,16 @@ async def approve_target(
 ) -> UploadTarget:
     """Open a requested table for loads, after checking the table still matches the contract."""
     target = await _pending(session, target_id)
-    columns = await table_schema(
-        target.target_type, target.database_name, target.schema_name, target.table_name
-    )
+    columns = await table_schema(target.database_name, target.table_name)
     _check_against_schema(columns, Contract.model_validate(target.contract), list(target.key_columns or []))
     # the full check, including the one a requester can't run (BigQuery's staging table)
     await require_access(
-        target.target_type,
         target.database_name,
-        target.schema_name,
         target.table_name,
         list(target.write_modes),
         list(target.key_columns or []),
         probe_writes=True,
+        file_upload=bool((target.contract or {}).get("file_upload", {}).get("enabled")),
     )
     target.schema_snapshot = columns
     target.onboarding_status = "approved"
@@ -370,6 +365,7 @@ async def approve_target(
     target.reviewed_at = datetime.now(UTC)
     target.review_note = (note or "").strip() or None
     await session.flush()
+    await file_upload.publish_contract(get_settings(), target)
     log.info("%s approved onboarding %s", admin.username, target.location)
     return target
 

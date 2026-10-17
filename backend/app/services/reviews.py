@@ -15,7 +15,7 @@ from app.core.config import Settings
 from app.models.targets import UploadTarget
 from app.models.user import PasswordResetRequest, User
 from app.models.workspace import UploadRequest, WorkspaceFile, WorkspaceFileVersion
-from app.services import auth, file_parser, loaders, studio_changes, validators
+from app.services import auth, file_parser, file_upload, loaders, studio_changes, validators
 from app.services.errors import NotFound, ServiceError
 from app.services.workspace import contract_rules, run_storage
 
@@ -98,6 +98,9 @@ async def approve_upload(
     """Re-validate the exact version that was submitted against the table as it is now,
     then load it. The outcome (completed or failed) is recorded either way."""
     request = await _pending_request(session, request_id)
+    if request.origin == "pipeline":
+        # File upload: Cloud Run loads it; approving puts it in the landing bucket
+        return await file_upload.approve(session, settings, admin, request)
     file = await session.get(WorkspaceFile, request.file_id)
     if file is None or file.status != "active":
         raise ServiceError("The source file no longer exists.", status_code=410)
@@ -118,12 +121,10 @@ async def approve_upload(
     try:
         data = await run_storage(get_storage().download, path)
         parsed = await asyncio.to_thread(file_parser.parse, data, file.format, None, settings.max_rows)
-        target_cols = await loaders.target_columns(
-            request.target_type, request.target_database, request.target_schema, request.target_table
-        )
+        target_cols = await loaders.target_columns(request.target_database or "", request.target_table)
         # the contract as it is now: if an admin tightened it since the request, that counts
         onboarded = await session.get(UploadTarget, request.target_id) if request.target_id else None
-        rules, max_rows = contract_rules(request.target_type, request.target_table, onboarded)
+        rules, max_rows = contract_rules(request.target_table, onboarded)
         report = validators.validate(parsed, target_cols, request.write_mode, keys, rules, max_rows=max_rows)
         report["contract_version"] = onboarded.contract_version if onboarded else None
         report["contract_rules"] = len(rules)
@@ -149,18 +150,14 @@ async def approve_upload(
         if request.origin == "studio" and request.write_mode != "upsert":
             # Data Studio edits change rows in place, found by their original values
             request.result = await studio_changes.apply(
-                request.target_type,
                 request.target_database or "",
-                request.target_schema,
                 request.target_table,
                 request.change_summary or {},
                 {c["name"]: c["type"] for c in target_cols},
             )
         else:
             request.result = await loaders.load(
-                request.target_type,
-                request.target_database,
-                request.target_schema,
+                request.target_database or "",
                 request.target_table,
                 parsed,
                 request.write_mode,
@@ -195,3 +192,22 @@ async def reject_upload(
     request.review_note = (note or "").strip() or None
     log.info("%s rejected load %s", admin.username, request.id)
     return request
+
+
+async def delete_upload(session: AsyncSession, admin: User, request_id: uuid.UUID) -> None:
+    """Remove a request of any kind and status. Only DataDesk's record goes: the file stays in
+    My files, rows already loaded stay in the table, and a file already handed to Cloud Run is
+    still processed there."""
+    request = await session.get(UploadRequest, request_id)
+    if request is None:
+        raise NotFound("Load request")
+    log.info(
+        "%s deleted %s request %s (%s, %s.%s)",
+        admin.username,
+        request.origin,
+        request.id,
+        request.status,
+        request.target_database,
+        request.target_table,
+    )
+    await session.delete(request)

@@ -3,9 +3,9 @@
 DataDesk is a personal data workspace with governed loads. Everyone gets a OneDrive-style
 space for their CSV, TSV, Excel and JSON files: kept in GCS, edited in the browser like a
 spreadsheet, with every save kept as a version. When a file needs to go into a shared
-**PostgreSQL** or **BigQuery** table, the owner asks for it; the file is validated against
-the table's live schema, an admin approves, and only then is it loaded. Oracle is listed
-as coming soon.
+**BigQuery** table, the owner asks for it; the file is validated against the table's live
+schema, an admin approves, and only then is it loaded. DataDesk loads into BigQuery only;
+its own metadata (people, files, requests) lives in PostgreSQL.
 
 It shares its repository conventions and its look with [KnowHub](../KnowHub): the same
 Makefile, database tooling, layered FastAPI backend, and Next.js + Tailwind front end in
@@ -19,13 +19,14 @@ the same forest-green palette.
 | **Files** | Folders and sub-folders, drag-and-drop multi-file upload with progress, search across every folder, sort, rename, download, delete |
 | **Edit** | Spreadsheet grid: edit cells, add rows and columns, rename a column (double-click its header), resize columns, open long values in a dialog, pick the CSV delimiter; every save is a new version with a note |
 | **Versions** | The full history of a file, and a download of any version |
-| **Load to table** | Pick BigQuery / PostgreSQL → dataset or database → an onboarded table, see its data contract, append or upsert, and get every schema and contract problem listed by row before anything reaches an admin |
-| **Data Studio** | Pick BigQuery or PostgreSQL, browse the onboarded datasets and tables, query them with SQL (one read-only SELECT over onboarded tables only), change a few cells or add a few rows in the result grid, and send them for approval: they pass the same schema and contract checks and the same admin approval as a file. **Export to My files** turns a result into a CSV for bigger edits |
-| **Onboarding** | Admins onboard a table (pick a BigQuery dataset or Postgres database and a table from live lists), write its **data contract** per column (required, unique, allowed values, regex, numeric range, text length, a note for uploaders, max rows per file), and choose the allowed write modes and the upsert key. **Test access** first checks that DataDesk's own account can read and write the table for those modes (BigQuery permissions and job rights; Postgres privileges and a unique index on the upsert key) and names the grant to fix anything missing. Every onboarded, open table appears in everyone's "Load to table" list; changing the contract bumps its version |
+| **Load to table** | From a file's own page: the File upload form for that file, with the same checks and the same Cloud Run process (see [File upload](#file-upload-cloud-run)). Every schema and contract problem is listed by row before anything reaches an admin |
+| **Data Studio** | Browse the onboarded BigQuery datasets and tables, query them with SQL (one read-only SELECT over onboarded tables only), change a few cells or add a few rows in the result grid, and send them for approval: they pass the same schema and contract checks and the same admin approval as a file. **Export to My files** turns a result into a CSV for bigger edits |
+| **File upload** | Send a CSV or Excel file (a new upload or one from My files) to a BigQuery table through the Cloud Run file processor: see the file name the contract expects and the name it will land under, get every problem listed before an admin sees it, then follow it through approval, the landing bucket, Cloud Run's checks and the BigQuery load, with the reason when it fails. See [File upload](#file-upload-cloud-run) |
+| **Onboarding** | Admins onboard a BigQuery table (pick a dataset and a table from live lists), write its **data contract** per column (required, unique, allowed values, regex, numeric range, text length, date format, stop-the-file or warn-only, a note for uploaders, fewest and most rows per file), turn on **File upload (Cloud Run)** with its file name prefix and append or overwrite, and choose the write modes Data Studio may use. **Test access** first checks that DataDesk's own account can read and write the table (and, with File upload on, reach Cloud Run's buckets and audit tables) and names the role to fix anything missing. Changing the contract bumps its version |
 | **Approvals** | Admins approve or reject loads (the file is validated again at approval, then loaded), approve new accounts, set temporary passwords, suspend people, and see the full history |
 | **Appearance** | Light, Dark or Auto, chosen in the top bar; the choice is a cookie, so the server renders the right palette from the first byte |
 
-Not built yet: Oracle loads, moving files between folders.
+Not built yet: moving files between folders.
 
 ## Run it locally
 
@@ -63,7 +64,6 @@ from `.env.example`:
 |---|---|
 | `DATABASE_URL` | the app's own role and database, e.g. `postgresql+asyncpg://datadesk:<password>@localhost:5432/datadesk`. `make db-init` creates both from this URL |
 | `POSTGRES_ADMIN_URL` | a superuser on the same server, e.g. `postgresql://postgres@localhost:5432/postgres` |
-| `TARGET_DATABASE_URL` | a login on the server that holds the upload-target tables; the database at the end is swapped per target |
 | `JWT_SECRET` | a fresh random value: `openssl rand -hex 32`. Never copy it between machines or into git |
 | `GCP_PROJECT_ID` / `GCS_BUCKET` | the project and the bucket behind the workspace |
 
@@ -95,8 +95,9 @@ prove writes work; `ARGS=--no-write` skips that.
 ## Upload targets
 
 **Onboarding (Admin → Onboarding) is how a table becomes a target.** An admin picks the
-table, writes its data contract and opens it for loads; from then on everyone can choose
-it in "Load to table". A file sent to it must pass, in order:
+table, writes its data contract and opens it for loads. With File upload (Cloud Run) on,
+everyone can send files to it from File upload or a file's Load to table tab; open tables
+are also offered in Data Studio. Data sent to it must pass, in order:
 
 1. the table's live schema — columns exist, values fit the types, NOT NULL is respected;
 2. the data contract — required columns, unique values, allowed values, regex, ranges, lengths, max rows;
@@ -107,12 +108,9 @@ approves, the file is checked again against the table and the **current** contra
 tightening a contract also applies to requests already waiting), then loaded. Pausing a
 target hides it from the list without losing its contract.
 
-Oracle is listed but not loadable yet.
-
-The older per-person grants still work alongside onboarding: a `db_access_grants` row
-(Postgres) or an approved `bq_access_requests` row (BigQuery) opens a table to one person,
-checked against the schema and any file in [backend/data-contracts](backend/data-contracts/README.md).
-Postgres targets must live on the server `TARGET_DATABASE_URL` points at.
+The older per-person grants still work alongside onboarding: an approved
+`bq_access_requests` row opens a BigQuery table to one person, checked against the schema
+and any file in [backend/data-contracts](backend/data-contracts/README.md).
 
 ## Data Studio
 
@@ -121,10 +119,8 @@ go through a file: **Export to My files** saves the query result as a CSV, which
 and loaded with Load to table.
 
 - **Queries are read-only.** One `SELECT` (or `WITH`) statement, over onboarded tables only,
-  run as DataDesk's own identity. Postgres runs it in a read-only transaction with a
-  statement timeout, after checking the query plan for other tables. BigQuery dry-runs it
-  first, to check the statement type, the tables it reads and the bytes it would scan.
-  DataDesk's own database is never offered. Limits: `STUDIO_ROW_LIMIT` rows shown,
+  run as DataDesk's own identity. BigQuery dry-runs it first, to check the statement type,
+  the tables it reads and the bytes it would scan. Limits: `STUDIO_ROW_LIMIT` rows shown,
   `STUDIO_QUERY_TIMEOUT_SECONDS`, `STUDIO_MAX_BYTES_BILLED`.
 - **What can be edited.** Existing rows can be edited when the table allows upsert and the
   query returns its upsert key. The key columns themselves are locked. New rows can be
@@ -136,6 +132,51 @@ and loaded with Load to table.
   My files › Data Studio, and files an ordinary load request (`origin = 'studio'`). Up to
   `STUDIO_MAX_CHANGES` rows are sent at a time. The request page shows the approver every
   change as before → after, plus the query the rows came from.
+
+## File upload (Cloud Run)
+
+The File upload tab sends files to BigQuery through the Cloud Run file processor in
+[cloud-run-poc](../cloud-run-poc): GCS landing bucket → Pub/Sub → Cloud Run → BigQuery,
+with every attempt recorded in `file_audit.job_metadata` and every check in
+`file_audit.validation_metadata`. DataDesk doesn't load these files itself.
+
+**One contract.** The onboarding contract is the only place a table's rules are written.
+An admin turns on **File upload (Cloud Run)** for a BigQuery table under Onboarding. That
+sets the file name prefix (files land as `customer_YYYYMMDD.csv`), CSV and/or Excel, and
+append or overwrite. From then on DataDesk publishes the contract to
+`gs://$FILE_UPLOAD_CONFIG_BUCKET/contracts/<dataset>.<table>.yaml` every time it changes,
+and removes it when the table is paused. Cloud Run's own contract for that table (for
+example `customer.yaml`) is replaced, and onboarding starts from its rules when one exists.
+Edit contracts in DataDesk, not in the bucket.
+
+| Rule | DataDesk (before sending) | Cloud Run (after landing) |
+|---|---|---|
+| required, unique, allowed values, regex, min/max, min/max length | ✓ | ✓ |
+| type (from the table's schema), date format | ✓ (same parsing as Cloud Run) | ✓ |
+| warn only (`severity: warning`) | shown, doesn't block | recorded, doesn't block |
+| header: every column, in table order | ✓ | ✓ |
+| fewest / most rows | ✓ | ✓ |
+
+**The flow.**
+
+1. **Send.** The person uploads a file or picks one from My files, then picks the dataset and
+   table. The form shows the name Cloud Run expects. A file with a different name keeps its
+   own name in My files and lands as `{prefix}_{file date}.{ext}`. The file date comes from a
+   date in its name, or today, and can be changed. The file is checked as above; only a
+   passing file becomes a request (`origin = 'pipeline'`).
+2. **Approve.** The admin approves it in Approvals, as with any load. It is checked again
+   against the current contract, then copied to
+   `gs://$FILE_UPLOAD_LANDING_BUCKET/$FILE_UPLOAD_LANDING_PREFIX/<request id>/<name>`.
+   Approval waits `FILE_UPLOAD_CONTRACT_TTL_SECONDS` after a contract change, because
+   Cloud Run caches contracts for that long.
+3. **Follow.** DataDesk finds Cloud Run's attempts by the landed object's URI and
+   generation. The request moves to *completed* (rows loaded, file archived) or *failed*,
+   showing Cloud Run's reason and the failing checks with sample rows. The request page
+   refreshes every few seconds while Cloud Run has the file and has a Refresh button. With
+   no job after `FILE_UPLOAD_PICKUP_MINUTES`, it says the file wasn't picked up.
+
+Set `FILE_UPLOAD_*` in `.env` (see `.env.example`) and restart the API. `make check-gcp`
+checks that DataDesk can write to both buckets and read the audit tables.
 
 ## DataDesk's own identity
 
@@ -188,8 +229,9 @@ stays identical), and loads log the table and the row counts.
 ```
 Browser ──▶ Next.js (web :3001) ──/api──▶ FastAPI (api :8001) ──▶ PostgreSQL   users, folders, files, versions, requests
                                                                ├─▶ GCS          file bytes, every version
-                                                               ├─▶ Postgres     target tables (on approval)
-                                                               └─▶ BigQuery     target tables (on approval)
+                                                               ├─▶ BigQuery     target tables (on approval)
+                                                               └─▶ Cloud Run    File upload: contracts → config bucket,
+                                                                                files → landing bucket, file_audit read back
 ```
 
 The browser only ever calls same-origin `/api/*`; Next proxies it to FastAPI, so the
@@ -200,8 +242,8 @@ service sits behind an adapter in `backend/app/adapters/`.
 
 | Path | Contents |
 |---|---|
-| `frontend/` | Next.js app (App Router, Tailwind v4): `/` files, `/files/[id]` editor, `/uploads`, `/admin`, `/login`, `/register`, `/forgot-password` |
-| `backend/` | FastAPI app: `core/` (config, db, logging, security), `api/v1/` (routes), `services/` (logic), `adapters/` (GCS, BigQuery, target Postgres), `models/`, `schemas/`. Every setting is in `backend/app/core/config.py` |
+| `frontend/` | Next.js app (App Router, Tailwind v4): `/` files, `/files/[id]` editor, `/uploads` (requests and their history), `/file-upload`, `/admin`, `/login`, `/register`, `/forgot-password` |
+| `backend/` | FastAPI app: `core/` (config, db, logging, security), `api/v1/` (routes), `services/` (logic), `adapters/` (GCS, BigQuery, the Cloud Run pipeline), `models/`, `schemas/`. Every setting is in `backend/app/core/config.py` |
 | `backend/data-contracts/` | optional per-table validation rules |
 | `database/` | `init_db.sql`, migrations, seeds and the setup scripts ([README](database/README.md)) |
 | `infra/` | `check_gcp.py` and the Python tools the scripts need |

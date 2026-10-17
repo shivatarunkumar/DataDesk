@@ -23,6 +23,20 @@ class ColumnRule(BaseModel):
     max: float | None = None
     min_length: int | None = Field(default=None, ge=0)
     max_length: int | None = Field(default=None, ge=1)
+    # strptime format for a date or timestamp column whose files don't use ISO 8601 (%d/%m/%Y)
+    format: str | None = Field(default=None, max_length=100)
+    # "warning": a failing value is reported but doesn't stop the file
+    severity: Literal["error", "warning"] = "error"
+
+    @field_validator("format")
+    @classmethod
+    def format_is_strptime(cls, value: str | None) -> str | None:
+        value = (value or "").strip()
+        if not value:
+            return None
+        if "%" not in value:
+            raise ValueError("a date format uses strptime codes, e.g. %d/%m/%Y")
+        return value
 
     @field_validator("regex")
     @classmethod
@@ -50,10 +64,45 @@ class ColumnRule(BaseModel):
         return self
 
 
+FILE_PREFIX = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$"
+
+
+class FileUpload(BaseModel):
+    """How files reach a BigQuery table through the Cloud Run file processor (File upload tab).
+    When enabled, the contract is published to Cloud Run's config bucket as YAML."""
+
+    enabled: bool = False
+    # files land as {file_prefix}_{YYYYMMDD}.{csv|xlsx}; Cloud Run maps the name to this table
+    file_prefix: str | None = Field(default=None, pattern=FILE_PREFIX)
+    # append adds the rows; overwrite replaces the whole table with the file
+    load_mode: Literal["append", "overwrite"] = "append"
+    formats: list[Literal["csv", "xlsx"]] = Field(default_factory=lambda: ["csv", "xlsx"], min_length=1)
+
+    @field_validator("file_prefix", mode="before")
+    @classmethod
+    def no_trailing_separator(cls, value: str | None) -> str | None:
+        """ "customer_" means "customer": the "_" before the date is added for you."""
+        cleaned = (value or "").strip().rstrip("_-")
+        return cleaned or None
+
+    @field_validator("formats")
+    @classmethod
+    def unique_formats(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(value))
+
+
 class Contract(BaseModel):
     columns: list[ColumnRule] = Field(default_factory=list)
-    # reject a file with more rows than this
+    # reject a file with fewer / more rows than this
+    min_rows: int | None = Field(default=None, ge=1)
     max_rows: int | None = Field(default=None, ge=1)
+    file_upload: FileUpload | None = None
+
+    @model_validator(mode="after")
+    def rows_make_sense(self) -> "Contract":
+        if self.min_rows and self.max_rows and self.min_rows > self.max_rows:
+            raise ValueError("the fewest rows per file is more than the most")
+        return self
 
     @field_validator("columns")
     @classmethod
@@ -66,9 +115,8 @@ class Contract(BaseModel):
 
 
 class TargetIn(BaseModel):
-    target_type: Literal["bigquery", "postgres", "oracle"]
+    # the BigQuery dataset and table
     database_name: str = Field(pattern=IDENT, max_length=1024)
-    schema_name: str | None = Field(default=None, pattern=IDENT, max_length=63)
     table_name: str = Field(pattern=IDENT, max_length=1024)
     display_name: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
@@ -84,10 +132,6 @@ class TargetIn(BaseModel):
         self.write_modes = list(dict.fromkeys(self.write_modes))
         if "upsert" in self.write_modes and not self.key_columns:
             raise ValueError("Pick the key columns that identify a row, or don't allow upsert")
-        if self.target_type == "bigquery":
-            self.schema_name = None
-        elif not self.schema_name:
-            self.schema_name = "public"
         return self
 
 
@@ -111,9 +155,7 @@ class TargetOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    target_type: str
     database_name: str
-    schema_name: str | None
     table_name: str
     location: str
     display_name: str
@@ -130,6 +172,8 @@ class TargetOut(BaseModel):
     request_reason: str | None = None
     reviewed_at: datetime | None = None
     review_note: str | None = None
+    # {uri, version, published_at} while Cloud Run has the contract
+    contract_published: dict | None = None
     # filled in by the API
     request_count: int = 0
     requested_by_name: str | None = None
@@ -140,7 +184,6 @@ class TargetOut(BaseModel):
 
 
 class SourceTable(BaseModel):
-    schema_name: str | None = None
     table: str
     kind: str = "TABLE"
     onboarded_id: uuid.UUID | None = None
@@ -154,10 +197,21 @@ class SourceColumn(BaseModel):
 
 class AccessCheckIn(BaseModel):
     database_name: str = Field(pattern=IDENT, max_length=1024)
-    schema_name: str | None = Field(default=None, pattern=IDENT, max_length=63)
     table_name: str = Field(pattern=IDENT, max_length=1024)
     write_modes: list[Literal["append", "upsert"]] = Field(default_factory=lambda: ["append"], min_length=1)
     key_columns: list[str] = Field(default_factory=list)
+    # also check what File upload needs: the config and landing buckets, and the audit tables
+    file_upload: bool = False
+
+
+class CloudRunContract(BaseModel):
+    """A contract Cloud Run already has for a table, turned into DataDesk's form, so onboarding
+    starts from the rules that are live today."""
+
+    source: str
+    contract: Contract
+    # what couldn't be carried over, in words
+    notes: list[str] = []
 
 
 class AccessCheck(BaseModel):

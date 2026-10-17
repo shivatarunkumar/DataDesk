@@ -1,8 +1,7 @@
 """Request/response shapes for the workspace API."""
 
 import uuid
-from datetime import datetime
-from typing import Literal
+from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -72,12 +71,11 @@ class FilePatch(BaseModel):
 
 
 class TargetTable(BaseModel):
-    target_type: Literal["postgres", "bigquery", "oracle"]
-    database: str | None = None  # Postgres database / BigQuery dataset
-    schema_name: str | None = None
+    """A BigQuery table someone may load into."""
+
+    database: str | None = None  # the BigQuery dataset
     table: str
     label: str
-    enabled: bool = True  # false = "coming soon"
     # set for onboarded targets: the contract a file must pass, and what may be chosen
     target_id: uuid.UUID | None = None
     description: str | None = None
@@ -88,28 +86,13 @@ class TargetTable(BaseModel):
     columns: list[dict] | None = None
 
 
-class UploadRequestCreate(BaseModel):
-    file_id: uuid.UUID
-    # an onboarded target; when given, it decides where the file goes and which contract applies
-    target_id: uuid.UUID | None = None
-    # otherwise a granted table, named directly
-    target_type: Literal["postgres", "bigquery", "oracle"] | None = None
-    database: str | None = None
-    schema_name: str | None = "public"
-    table: str | None = None
-    write_mode: Literal["append", "upsert"]
-    key_columns: list[str] | None = None
-    justification: str | None = Field(default=None, max_length=2000)
-
-
 class UploadRequestOut(BaseModel):
     id: uuid.UUID | None = None
     file_id: uuid.UUID
     file_name: str | None = None
     file_version: int | None = None
-    target_type: str
+    target_type: str = "bigquery"
     target_database: str | None = None
-    target_schema: str | None = None
     target_table: str
     write_mode: str
     key_columns: list | None = None
@@ -133,9 +116,55 @@ class UploadRequestOut(BaseModel):
     reviewed_by_name: str | None = None
     # the viewer may see the file and every validation error
     is_mine: bool = False
-    # "file", or "studio" for edits made in Data Studio: {edited, added, cells, columns, query}
+    # "file", "studio" for edits made in Data Studio ({edited, added, cells, columns, query}),
+    # or "pipeline" for a file sent through the Cloud Run file processor (File upload)
     origin: str = "file"
     change_summary: dict | None = None
+    # pipeline: the name it lands under, where it landed, and what Cloud Run did with it
+    file_date: date | None = None
+    landing_name: str | None = None
+    landing_uri: str | None = None
+    landed_at: datetime | None = None
+    pipeline: dict | None = None
+    pipeline_checked_at: datetime | None = None
+
+
+class FileUploadIn(BaseModel):
+    """A file to send to BigQuery through Cloud Run (the File upload tab)."""
+
+    file_id: uuid.UUID
+    target_id: uuid.UUID
+    # the date in the landing name; empty → the one in the file's name, else today
+    file_date: date | None = None
+    justification: str | None = Field(default=None, max_length=2000)
+
+
+class FileUploadTarget(BaseModel):
+    """A BigQuery table that takes files through Cloud Run, as the File upload form shows it."""
+
+    target_id: uuid.UUID
+    dataset: str
+    table: str
+    label: str
+    description: str | None = None
+    file_prefix: str
+    # "customer_YYYYMMDD.csv or .xlsx"
+    expected_name: str
+    load_mode: str
+    formats: list[str]
+    contract: dict
+    contract_version: int
+    # the columns a file must have, in order
+    columns: list[dict]
+    published: dict | None = None
+
+
+class FileUploadConfig(BaseModel):
+    enabled: bool
+    landing_bucket: str | None = None
+    config_bucket: str | None = None
+    pickup_minutes: int
+    targets: list[FileUploadTarget]
 
 
 class TransferIn(BaseModel):

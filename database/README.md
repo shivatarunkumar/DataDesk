@@ -4,8 +4,7 @@ All DataDesk database work lives here: Postgres migrations (DDL), seed data, and
 scripts that apply them. The backend only *uses* the schema; it never creates it.
 
 This is DataDesk's own metadata database (users, folders, files, versions, load requests).
-The tables people load files *into* live elsewhere, on the server `TARGET_DATABASE_URL`
-points at, or in BigQuery.
+The tables people load files *into* live in BigQuery.
 
 ## Layout
 ```
@@ -38,6 +37,9 @@ tests/            migration runner tests
 | `V005__upload_requests` | `upload_requests` |
 | `V006__onboarded_targets` | `upload_targets` (onboarded tables + data contract + version); `upload_requests.target_id`, `contract_version` |
 | `V007__fix_target_name_checks` | fixes V006's name CHECKs (Postgres caps regex repetition at 255) |
+| `V008` … `V012` | onboarding requests, Data Studio requests and edit-in-place, requested role, admin access |
+| `V013__file_upload_pipeline` | File upload through Cloud Run: `upload_requests` landing and pipeline columns, `upload_targets.contract_published` |
+| `V014__bigquery_only` | BigQuery is the only target: drops `pg_databases`, `pg_tables_catalog`, `db_access_requests`, `db_access_grants` and the schema columns, removes Postgres/Oracle targets |
 
 ## How to run the scripts
 

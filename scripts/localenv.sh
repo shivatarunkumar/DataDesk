@@ -17,7 +17,6 @@ No .env file yet. On a new machine:
 
 then open .env and set:
   DATABASE_URL / POSTGRES_ADMIN_URL  your local Postgres user, password and port
-  TARGET_DATABASE_URL                the Postgres server that holds the upload targets
   JWT_SECRET                         openssl rand -hex 32
   GCP_PROJECT_ID / GCS_BUCKET        the project and bucket behind the workspace
 
@@ -31,7 +30,7 @@ set -a
 . "$_root/.env"
 set +a
 
-for _var in DATABASE_URL POSTGRES_ADMIN_URL TARGET_DATABASE_URL GCS_ENDPOINT_URL; do
+for _var in DATABASE_URL POSTGRES_ADMIN_URL GCS_ENDPOINT_URL; do
   _value="${!_var:-}"
   [[ -z "$_value" ]] && continue
   _value="${_value//host.docker.internal/localhost}"

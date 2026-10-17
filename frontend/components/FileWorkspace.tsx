@@ -8,7 +8,7 @@ import { humanSize, timeAgo } from "@/lib/format";
 import type { Folder, WsFile } from "@/lib/types";
 import { FileGlyph } from "./FileGlyph";
 import { ArrowLeftIcon, DatabaseIcon, DownloadIcon, HistoryIcon, PencilIcon, QueueIcon, SpinnerIcon, TrashIcon } from "./icons";
-import { LoadToTable } from "./LoadToTable";
+import { SendFile } from "./FileUpload";
 import { RequestList } from "./RequestList";
 import { SpreadsheetEditor } from "./SpreadsheetEditor";
 import { Alert, Dialog, EmptyState, Field, btn } from "./ui";
@@ -150,7 +150,7 @@ export function FileWorkspace({ fileId }: { fileId: string }) {
             }}
           />
         )}
-        {tab === "load" && <LoadToTable file={file} onSubmitted={() => go("requests")} />}
+        {tab === "load" && <SendFile file={file} />}
         {tab === "requests" && <RequestList fileId={file.id} />}
       </div>
 

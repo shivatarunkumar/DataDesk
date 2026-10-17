@@ -108,20 +108,12 @@ def test_ranges_must_make_sense():
         ColumnRule(name="email", min_length=10, max_length=2)
 
 
-def test_upsert_needs_keys_and_bigquery_has_no_schema():
-    base = {
-        "target_type": "bigquery",
-        "database_name": "sales",
-        "table_name": "customers",
-        "display_name": "C",
-    }
+def test_upsert_needs_keys():
+    base = {"database_name": "sales", "table_name": "customers", "display_name": "C"}
     with pytest.raises(ValidationError, match="key columns"):
         TargetIn(**base, write_modes=["upsert"])
-    target = TargetIn(
-        **base, schema_name="public", write_modes=["append", "upsert", "append"], key_columns=["id"]
-    )
-    assert target.schema_name is None and target.write_modes == ["append", "upsert"]
-    assert TargetIn(**{**base, "target_type": "postgres"}).schema_name == "public"
+    target = TargetIn(**base, write_modes=["append", "upsert", "append"], key_columns=["id"])
+    assert target.write_modes == ["append", "upsert"]
 
 
 def test_stored_contract_keeps_only_real_rules():

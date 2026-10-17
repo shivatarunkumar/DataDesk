@@ -3,8 +3,8 @@
 import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { api, errorText } from "@/lib/api";
 import Link from "next/link";
-import { TARGET_LABELS, dateTime, timeAgo } from "@/lib/format";
-import { notifyPendingChanged } from "@/lib/pending";
+import { dateTime, timeAgo } from "@/lib/format";
+import { PENDING_CHANGED, notifyPendingChanged } from "@/lib/pending";
 import type { AdminRequest, OnboardedTarget, PasswordReset, SessionUser, UploadRequest } from "@/lib/types";
 import { accessLabel } from "./AccountPanel";
 import {
@@ -16,7 +16,7 @@ import {
   toMinutes,
 } from "./DurationPicker";
 import { SearchIcon, SpinnerIcon } from "./icons";
-import { ValidationReportView } from "./LoadToTable";
+import { ValidationReportView } from "./ValidationReport";
 import { ruleCount } from "./ContractSummary";
 import { RequestCard } from "./RequestList";
 import { Alert, Dialog, EmptyState, Field, StatusPill, btn, inputClass } from "./ui";
@@ -69,6 +69,8 @@ function Loading() {
 }
 
 // ------------------------------------------------------------------ approvals
+const REFRESH_MS = 30_000;
+
 function Approvals() {
   const [loads, setLoads] = useState<UploadRequest[] | null>(null);
   const [tables, setTables] = useState<OnboardedTarget[]>([]);
@@ -88,7 +90,11 @@ function Approvals() {
   const [resetting, setResetting] = useState<PasswordReset | null>(null);
   const [report, setReport] = useState<UploadRequest | null>(null);
 
+  const [loadedAt, setLoadedAt] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
   const load = useCallback(async () => {
+    setRefreshing(true);
     try {
       const [l, u, r, t, a] = await Promise.all([
         api<UploadRequest[]>("/admin/upload-requests"),
@@ -102,13 +108,24 @@ function Approvals() {
       setUsers(u);
       setResets(r);
       setAdminRequests(a);
+      setLoadedAt(new Date().toISOString());
     } catch (e) {
       setError(errorText(e));
+    } finally {
+      setRefreshing(false);
     }
   }, []);
 
+  // new requests show up without reloading the page: on a timer, and whenever the
+  // pending count changes (the sidebar badge polls too)
   useEffect(() => {
     load();
+    const timer = setInterval(load, REFRESH_MS);
+    window.addEventListener(PENDING_CHANGED, load);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener(PENDING_CHANGED, load);
+    };
   }, [load]);
 
   async function act(key: string, fn: () => Promise<unknown>) {
@@ -129,7 +146,12 @@ function Approvals() {
   const approveLoad = (r: UploadRequest) =>
     act(`${r.id}-approve`, async () => {
       const done = await api<UploadRequest>(`/admin/upload-requests/${r.id}/approve`, { method: "POST" });
-      if (done.status === "completed") {
+      if (done.origin === "pipeline" && done.status === "approved") {
+        setNotice({
+          tone: "ok",
+          text: `Sent ${r.file_name} to Cloud Run as ${done.landing_name}. Follow it on the request.`,
+        });
+      } else if (done.status === "completed") {
         setNotice({
           tone: "ok",
           text: `Loaded ${r.file_name} into ${r.target_database}.${r.target_table}.`,
@@ -148,6 +170,12 @@ function Approvals() {
 
   return (
     <>
+      <div className="mb-4 flex items-center justify-end gap-3 text-xs text-muted">
+        {loadedAt && <span>Updated {timeAgo(loadedAt)} · checks every {REFRESH_MS / 1000}s</span>}
+        <button type="button" className={btn.secondary} onClick={() => load()} disabled={refreshing}>
+          {refreshing ? <SpinnerIcon /> : null} Refresh
+        </button>
+      </div>
       {error && (
         <div className="mb-4">
           <Alert>{error}</Alert>
@@ -163,13 +191,15 @@ function Approvals() {
       {loads.length > 0 && (
         <Section title="Loads into tables" count={loads.length}>
           {loads.map((r) => (
-            <RequestCard key={r.id} request={r}>
+            <RequestCard key={r.id} request={r} onDeleted={load}>
               <div className="mt-3 flex flex-wrap gap-2">
                 <button type="button" className={btn.primary} disabled={busy !== null} onClick={() => approveLoad(r)}>
                   {busy === `${r.id}-approve` ? (
                     <>
-                      <SpinnerIcon /> Checking and loading…
+                      <SpinnerIcon /> {r.origin === "pipeline" ? "Checking and sending…" : "Checking and loading…"}
                     </>
+                  ) : r.origin === "pipeline" ? (
+                    "Approve & send to Cloud Run"
                   ) : (
                     "Approve & load"
                   )}
@@ -194,7 +224,7 @@ function Approvals() {
                 <p className="font-medium">
                   {t.display_name}{" "}
                   <span className="text-xs font-normal text-muted">
-                    ({TARGET_LABELS[t.target_type]} · {t.location})
+                    (BigQuery · {t.location})
                   </span>
                 </p>
                 <p className="text-xs text-muted">
@@ -599,42 +629,6 @@ function ResetDialog({ reset, onClose, onDone }: { reset: PasswordReset; onClose
   );
 }
 
-// ------------------------------------------------------------------ history
-/** Every decided load, for everyone. Row-level errors only reach the requester and admins. */
-export function LoadHistory() {
-  const [rows, setRows] = useState<UploadRequest[] | null>(null);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    api<UploadRequest[]>("/requests?status=reviewed")
-      .then(setRows)
-      .catch((e) => setError(errorText(e)));
-  }, []);
-  return (
-    <div className="mx-auto max-w-5xl px-4 pb-10 lg:px-6">
-      <PageHeader title="Load history">
-        Every load an admin has decided on: who asked, who decided and what happened.
-      </PageHeader>
-      {error ? (
-        <Alert>{error}</Alert>
-      ) : !rows ? (
-        <Loading />
-      ) : rows.length === 0 ? (
-        <EmptyState title="No decisions yet">Approved and rejected loads show up here.</EmptyState>
-      ) : (
-        <ul className="flex flex-col gap-2">
-          {rows.map((r) => (
-            <RequestCard key={r.id} request={r}>
-              {r.reviewed_at && <p className="mt-2 text-xs text-muted">Decided {dateTime(r.reviewed_at)}</p>}
-            </RequestCard>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-// ------------------------------------------------------------------ people
-/** Everyone active, and who the admins are. Admins also see status and manage access. */
 export function People({ viewer }: { viewer: SessionUser }) {
   const isAdmin = viewer.role === "admin";
   const [users, setUsers] = useState<SessionUser[] | null>(null);
